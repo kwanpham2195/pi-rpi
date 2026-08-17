@@ -24,6 +24,7 @@ import {
   updateArtifact,
 } from "../src/engine/index.ts";
 import { isWithinRoot, resolveArtifactPath } from "../src/paths.ts";
+import { implementPhase, reviewImplementation, startResearch } from "../src/agent-runtime.ts";
 
 export const DEFAULT_ROOT = ".pi/artifacts";
 
@@ -306,56 +307,81 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
     },
   });
 
+  // Agent-launch tools: real pi-subagents adapters (M4)
   // ---------------------------------------------------------------
-  // Agent-launch tools stubs: validate + report (adapters land in M4)
-  // ---------------------------------------------------------------
-  const agentRuntimeStub = {
-    execute: async (_toolCallId: string, params: unknown) => {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `rpi_agent tool: pi-subagents launch adapter pending (M4). Provided inputs:\n${JSON.stringify(params, null, 2)}`,
-          },
-        ],
-        details: { pending: true },
-      };
-    },
-  };
-
   pi.registerTool({
     name: "rpi_start_research",
     label: "RPI Start Research",
     description:
-      "Launch the research fanout (2-6 parallel read-only children) for the active task. M4 runtime.",
+      "Launch the research fanout (2-6 parallel fresh read-only research children) for the active task and return the run receipt with node types and tasks. The parent synthesizes results into the research artifact.",
     promptSnippet: "rpi_start_research — launch research fanout",
+    promptGuidelines: [
+      "Use rpi_start_research to run the research fanout; provide 2-6 node types and matching task strings, then synthesize results into the research artifact.",
+    ],
     parameters: Type.Object({
-      slug: Type.Optional(Type.String({ description: "Task slug (defaults to selected task)" })),
-      nodes: Type.Optional(Type.Number({ description: "Number of research children (2-6)" })),
+      nodes: Type.Array(
+        StringEnum(["artifact-locator", "artifact-analyzer", "artifact-pattern-finder", "artifact-web-researcher"] as const),
+        { description: "2-6 research node types" },
+      ),
+      tasks: Type.Array(Type.String(), { description: "One task string per node, same length" }),
     }),
-    ...agentRuntimeStub,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const receipt = await startResearch(pi, params.nodes as never, params.tasks, ctx.cwd);
+      return {
+        content: [
+          { type: "text" as const, text: `Research fanout run ${receipt.runId} ${receipt.state} across ${params.nodes.length} nodes.` },
+        ],
+        details: { runId: receipt.runId, state: receipt.state, nodes: params.nodes },
+      };
+    },
   });
 
   pi.registerTool({
     name: "rpi_implement_phase",
     label: "RPI Implement Phase",
-    description: "Launch one implementer agent for one phase of the active task. M4 runtime.",
+    description:
+      "Launch a single implementer agent (artifact-implementer or artifact-outline-implementer) for exactly one phase of the active task. The parent verifies automated checks afterwards and gates on the human.",
     promptSnippet: "rpi_implement_phase — run one implementation phase",
+    promptGuidelines: [
+      "Use rpi_implement_phase for exactly one phase at a time with a single writer; run automated checks after and present the manual-verification gate.",
+    ],
     parameters: Type.Object({
       phaseId: Type.String({ description: "Phase id from the plan/structure outline" }),
+      agent: StringEnum(["artifact-implementer", "artifact-outline-implementer"] as const),
+      phaseTask: Type.String({ description: "Task text describing the phase to implement" }),
     }),
-    ...agentRuntimeStub,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const receipt = await implementPhase(pi, params.agent, params.phaseTask, ctx.cwd);
+      return {
+        content: [
+          { type: "text" as const, text: `Phase ${params.phaseId} implementation run ${receipt.runId} ${receipt.state}.` },
+        ],
+        details: { runId: receipt.runId, state: receipt.state, phaseId: params.phaseId },
+      };
+    },
   });
 
   pi.registerTool({
     name: "rpi_review_implementation",
     label: "RPI Review Implementation",
-    description: "Launch a fresh reviewer to compare the plan against base...HEAD. M4 runtime.",
+    description:
+      "Launch a fresh read-only reviewer to compare the plan against base...HEAD and return the deviation report run.",
     promptSnippet: "rpi_review_implementation — plan-vs-implementation review",
+    promptGuidelines: [
+      "Use rpi_review_implementation before writing a PR description; the reviewer reports deviations, additions, and unimplemented items.",
+    ],
     parameters: Type.Object({
-      planArtifactId: Type.Optional(Type.String({ description: "Plan artifact id" })),
+      reviewTask: Type.String({ description: "Instructions naming the plan artifact and base branch" }),
     }),
-    ...agentRuntimeStub,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const receipt = await reviewImplementation(pi, params.reviewTask, ctx.cwd);
+      return {
+        content: [
+          { type: "text" as const, text: `Implementation review run ${receipt.runId} ${receipt.state}.` },
+        ],
+        details: { runId: receipt.runId, state: receipt.state },
+      };
+    },
   });
 
   // ---------------------------------------------------------------
