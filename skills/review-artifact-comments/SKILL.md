@@ -1,6 +1,6 @@
 ---
 name: review-artifact-comments
-description: Reviews and responds to feedback on task artifacts. Use when the user points to feedback on a document or asks to address review comments on an artifact.
+description: "Reviews and responds to feedback on task artifacts. Use when the user points to feedback on a document or asks to address review comments on an artifact."
 ---
 
 # Review Artifact Comments

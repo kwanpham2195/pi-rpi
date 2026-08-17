@@ -1,6 +1,6 @@
 ---
 name: create-structure-outline
-description: Converts research and design decisions into independently verifiable vertical implementation slices. Use after design discussion (rpi flow) or TDD (prd flow), before the detailed plan.
+description: "Converts research and design decisions into independently verifiable vertical implementation slices. Use after design discussion (rpi flow) or TDD (prd flow), before the detailed plan."
 ---
 
 # Create Structure Outline

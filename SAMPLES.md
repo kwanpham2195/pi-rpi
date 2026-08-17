@@ -61,7 +61,7 @@ Expected: research `approved`, manifest receipts `status-change` + `approval`.
 
 Continue the rpi flow: `create-design-discussion` → `create-structure-outline` → (optional `create-plan`) → `implement-outline` or `implement-plan` (one phase at a time, human gate per phase, `ci-commit` per phase) → `describe-pr`.
 
-## Oneshoot variant
+## Oneshot variant
 
 ```text
 Create task slug hotfix-1234, flow oneshot, ticket body <pasted fix>

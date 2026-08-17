@@ -1,6 +1,6 @@
 ---
 name: ci-commit
-description: Commits implementation changes for the active task with grouped, conventional messages, never staging the artifact root. Use when the user asks to commit work or after an implementation phase passes its gate.
+description: "Commits implementation changes for the active task with grouped, conventional messages, never staging the artifact root. Use when the user asks to commit work or after an implementation phase passes its gate."
 ---
 
 # Commit
@@ -18,7 +18,7 @@ Create clean commits for the task's implementation work. The artifact root is ne
 ## Process
 
 1. Review `git status` and `git diff` (unstaged + staged).
-2. Verify no artifact-root paths are staged: `git diff --cached --name-only | grep -c '^\.pi/artifacts'` must be 0.
+2. Verify no artifact-root paths are staged: `git diff --cached --name-only | grep -c '^\.pi/artifacts'` must print 0 (grep exits 1 on no match — treat that as pass).
 3. Plan the commit(s): group related changes.
 4. Stage explicit paths and commit.
 

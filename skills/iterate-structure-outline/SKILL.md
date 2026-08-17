@@ -1,6 +1,6 @@
 ---
 name: iterate-structure-outline
-description: Updates the structure-outline artifact in place from feedback. Use when phases, file changes, or validation need to change before implementation.
+description: "Updates the structure-outline artifact in place from feedback. Use when phases, file changes, or validation need to change before implementation."
 ---
 
 # Iterate Structure Outline

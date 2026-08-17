@@ -4,6 +4,7 @@ export * from "./types.ts";
 export {
   EngineError,
   validateSlug,
+  validateDescription,
   hashContent,
   hashFile,
   safeRelativePath,
@@ -17,12 +18,18 @@ export {
   tryLoadManifest,
   openTask,
   migrateManifest,
+  runMigration,
+  findArtifact,
+  validateFlow,
   createArtifact,
   updateArtifact,
   setArtifactStatus,
+  approve,
   assertStatusTransition,
   resolvePrecedence,
   changeFlow,
+  recordRunId,
+  recordPhaseCommit,
   fileExists,
 } from "./engine.ts";
 export type {

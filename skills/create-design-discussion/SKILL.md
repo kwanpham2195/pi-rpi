@@ -1,6 +1,6 @@
 ---
 name: create-design-discussion
-description: Turns research and the ticket into an explicit user-decided design document. Use after research when the task flow is rpi and design decisions must be resolved by the user.
+description: "Turns research and the ticket into an explicit user-decided design document. Use after research when the task flow is rpi and design decisions must be resolved by the user."
 ---
 
 # Create Design Discussion

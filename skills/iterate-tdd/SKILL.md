@@ -1,6 +1,6 @@
 ---
 name: iterate-tdd
-description: Updates the TDD artifact in place as technical decisions evolve. Use when the user gives feedback or corrects system or program design.
+description: "Updates the TDD artifact in place as technical decisions evolve. Use when the user gives feedback or corrects system or program design."
 ---
 
 # Iterate TDD

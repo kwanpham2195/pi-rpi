@@ -1,6 +1,6 @@
 ---
 name: iterate-plan
-description: Updates the plan artifact in place from feedback. Use when code shapes, phases, or verification need to change before or during implementation.
+description: "Updates the plan artifact in place from feedback. Use when code shapes, phases, or verification need to change before or during implementation."
 ---
 
 # Iterate Plan

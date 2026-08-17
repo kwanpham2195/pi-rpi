@@ -1,6 +1,6 @@
 ---
 name: create-tdd
-description: Runs the technical design interview and writes the TDD artifact with two sign-off gates. Use in a prd-flow task after the PRD, when cross-component and in-code design must be settled before implementation.
+description: "Runs the technical design interview and writes the TDD artifact with two sign-off gates. Use in a prd-flow task after the PRD, when cross-component and in-code design must be settled before implementation."
 ---
 
 # Create TDD

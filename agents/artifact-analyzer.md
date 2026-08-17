@@ -1,6 +1,6 @@
 ---
 name: artifact-analyzer
-description: Explains HOW selected code behaves with precise file:line citations and no evaluation. Use inside the research fanout to document the present state of a component or subsystem.
+description: "Explains HOW selected code behaves with precise file:line citations and no evaluation. Use inside the research fanout to document the present state of a component or subsystem."
 tools: read, bash, grep, ffgrep, fffind, ls
 thinking: medium
 systemPromptMode: replace

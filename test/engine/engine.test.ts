@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, mkdir, writeFile, readFile, symlink } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile, readFile, symlink, rename } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -101,14 +101,14 @@ test("createArtifact assigns chronological NN names and validates flow", async (
   });
   const taskDir = join(base, "auth-flow");
 
-  const r1 = await createArtifact(taskDir, m, {
+  const r1 = await createArtifact(taskDir, {
     type: "research-questions",
     description: "current-state",
     content: "# Questions\n",
   });
   assert.equal(r1.artifact.path, "01-current-state.md");
 
-  const r2 = await createArtifact(taskDir, m, {
+  const r2 = await createArtifact(taskDir, {
     type: "research",
     description: "auth-current",
     content: "# Research\n",
@@ -118,7 +118,7 @@ test("createArtifact assigns chronological NN names and validates flow", async (
 
   // prd not enabled in rpi flow
   await assert.rejects(
-    createArtifact(taskDir, m, { type: "prd", description: "unused", content: "" }),
+    createArtifact(taskDir, { type: "prd", description: "unused", content: "" }),
     /not enabled in flow/,
   );
   await rm(base, { recursive: true, force: true });
@@ -134,7 +134,7 @@ test("createArtifact validates dependencies", async () => {
   });
   const taskDir = join(base, "dep-test");
   await assert.rejects(
-    createArtifact(taskDir, m, {
+    createArtifact(taskDir, {
       type: "research",
       description: "x",
       content: "",
@@ -154,13 +154,13 @@ test("updateArtifact updates content hash", async () => {
     baseBranch: "main",
   });
   const taskDir = join(base, "hash-test");
-  const r = await createArtifact(taskDir, m, {
+  const r = await createArtifact(taskDir, {
     type: "research",
     description: "x",
     content: "v1",
   });
   const h1 = r.artifact.contentHash;
-  const updated = await updateArtifact(taskDir, m, "research", "v2 longer");
+  const updated = await updateArtifact(taskDir, "research", "v2 longer");
   assert.notEqual(updated.artifact.contentHash, h1);
   // hashFile on disk matches
   const onDisk = await hashFile(join(taskDir, r.artifact.path));
@@ -170,19 +170,21 @@ test("updateArtifact updates content hash", async () => {
 
 test("setArtifactStatus validates transitions and records receipts", async () => {
   const base = await mkTmp();
-  const m = await createTask(base, {
+  await createTask(base, {
     slug: "status-test",
     title: "Status",
     flow: "rpi",
     baseBranch: "main",
   });
   const taskDir = join(base, "status-test");
-  const r = await createArtifact(taskDir, m, {
+  const r = await createArtifact(taskDir, {
     type: "research",
     description: "x",
     content: "",
   });
   assert.equal(r.artifact.status, "draft");
+  // createArtifact loads fresh from disk; reload for status operations.
+  const m = await loadManifest(taskDir);
   // invalid: draft -> approved directly is blocked
   await assert.rejects(setArtifactStatus(m, "research", "approved"), /Invalid status transition/);
   await setArtifactStatus(m, "research", "in-review", taskDir);
@@ -196,7 +198,7 @@ test("setArtifactStatus validates transitions and records receipts", async () =>
 
 test("resolvePrecedence returns chain per flow, excluding research-questions", async () => {
   const base = await mkTmp();
-  const m = await createTask(base, {
+  await createTask(base, {
     slug: "prec-test",
     title: "Prec",
     flow: "rpi",
@@ -204,38 +206,41 @@ test("resolvePrecedence returns chain per flow, excluding research-questions", a
   });
   const taskDir = join(base, "prec-test");
   // add research-questions (excluded), research, design-discussion
-  await createArtifact(taskDir, m, {
+  await createArtifact(taskDir, {
     type: "research-questions",
     description: "qs",
     content: "",
   });
-  await createArtifact(taskDir, m, {
+  await createArtifact(taskDir, {
     type: "research",
     description: "r",
     content: "",
   });
-  await createArtifact(taskDir, m, {
+  await createArtifact(taskDir, {
     type: "design-discussion",
     description: "d",
     content: "",
   });
-  // rpi precedence: outline > design > research > ticket
+  // createArtifact loads fresh from disk; reload before precedence resolution.
+  const m = await loadManifest(taskDir);
+  // rpi precedence for outline inputs: design > research (ticket absent here)
   const inputs = resolvePrecedence(m, "structure-outline");
   const types = inputs.map((a) => a.type);
-  assert.deepEqual(types, ["design-discussion", "research"]); // research-questions filtered, no outline yet
+  assert.deepEqual(types, ["design-discussion", "research"]); // research-questions filtered
   await rm(base, { recursive: true, force: true });
 });
 
 test("changeFlow blocks when existing artifacts disabled in new flow, records receipt", async () => {
   const base = await mkTmp();
-  const m = await createTask(base, {
+  await createTask(base, {
     slug: "flow-test",
     title: "Flow",
     flow: "rpi",
     baseBranch: "main",
   });
   const taskDir = join(base, "flow-test");
-  await createArtifact(taskDir, m, { type: "research", description: "x", content: "" });
+  await createArtifact(taskDir, { type: "research", description: "x", content: "" });
+  const m = await loadManifest(taskDir);
   // rpi -> oneshot would orphan research
   await assert.rejects(changeFlow(m, "oneshot"), /not enabled in that flow/);
   // rpi -> freeform is fine
@@ -255,7 +260,7 @@ test("malformed manifest recovers from backup and logs receipt", async () => {
   });
   const taskDir = join(base, "malformed");
   // simulate a valid manifest, then corrupt the live file (backup from save is auto-created)
-  await createArtifact(taskDir, m, { type: "research", description: "x", content: "ok" });
+  await createArtifact(taskDir, { type: "research", description: "x", content: "ok" });
   await writeFile(join(taskDir, "artifact-manifest.json"), "{ not valid json ", "utf8");
   // should recover from backup (last good manifest) rather than crash
   const recovered = await loadManifest(taskDir);
@@ -302,8 +307,8 @@ test("concurrent createArtifact calls do not lose writes (atomic manifest)", asy
   });
   const taskDir = join(base, "conc");
   await Promise.all([
-    createArtifact(taskDir, m, { type: "research-questions", description: "qs", content: "qs" }),
-    createArtifact(taskDir, m, { type: "research", description: "r", content: "r" }),
+    createArtifact(taskDir, { type: "research-questions", description: "qs", content: "qs" }),
+    createArtifact(taskDir, { type: "research", description: "r", content: "r" }),
   ]);
   const onDisk = await loadManifest(taskDir);
   assert.equal(onDisk.artifacts.length, 2);
@@ -324,11 +329,10 @@ test("symlinked task root resolves through the same canonical path", async () =>
   });
   // Move the actual task dir into realRoot, then symlink it back into place.
   const moved = join(realRoot, "sym-task");
-  await rm(join(base, "sym-task"), { recursive: true, force: true });
-  await mkdir(moved, { recursive: true });
+  await rename(join(base, "sym-task"), moved);
   await symlink(moved, join(base, "sym-task"));
   const taskDir = join(base, "sym-task");
-  const created = await createArtifact(taskDir, m, {
+  const created = await createArtifact(taskDir, {
     type: "research",
     description: "x",
     content: "through symlink",

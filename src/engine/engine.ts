@@ -56,11 +56,27 @@ function enqueueSave<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
+/** Per-task critical section: whole read-validate-mutate-persist runs under one lock. */
+const taskLocks = new Map<string, Promise<unknown>>();
+async function withTaskLock<T>(taskDir: string, fn: () => Promise<T>): Promise<T> {
+  const prev = taskLocks.get(taskDir) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  taskLocks.set(taskDir, prev.then(() => gate));
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
 // ---------------------------------------------------------------------------
-// Slug validation
+// Slug / description validation
 // ---------------------------------------------------------------------------
 
 export const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+export const DESCRIPTION_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export function validateSlug(slug: string): void {
   if (!SLUG_RE.test(slug)) {
@@ -68,6 +84,18 @@ export function validateSlug(slug: string): void {
       `Invalid task slug: "${slug}". Use lowercase letters, digits, and single hyphens (kebab-case).`,
     );
   }
+}
+
+export function validateDescription(description: string): string {
+  if (!description || typeof description !== "string") {
+    throw new EngineError("Invalid description: empty.");
+  }
+  if (!DESCRIPTION_RE.test(description)) {
+    throw new EngineError(
+      `Invalid description: "${description}". Use a flat kebab-case slug (lowercase letters, digits, single hyphens, no slashes, no dots).`,
+    );
+  }
+  return description;
 }
 
 // ---------------------------------------------------------------------------
@@ -152,14 +180,19 @@ export async function loadManifest(taskDir: string): Promise<TaskManifest> {
   } catch (err) {
     // Recover from backup if the live file is corrupt and a backup exists
     const backup = backupPath(taskDir);
+    let raw: string;
     try {
-      await access(backup);
+      raw = await readFile(backup, "utf8");
     } catch {
       throw new EngineError(`Malformed manifest at ${path} and no backup to recover from. ${String(err)}`);
     }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new EngineError(`Malformed manifest at ${path} and the backup is also unreadable. ${String(err)}`);
+    }
     // Rewrite the live file from backup so future opens succeed
-    const raw = await readFile(backup, "utf8");
-    const parsed = JSON.parse(raw);
     await writeFile(path, raw, "utf8");
     return migrateManifest(parsed, taskDir);
   }
@@ -259,21 +292,51 @@ export async function tryLoadManifest(taskDir: string): Promise<TaskManifest | n
   return loadManifest(taskDir);
 }
 
-/** Open a task with migration metadata. */
+/**
+ * Open a task with migration metadata: persists migrated manifests, and records
+ * a `drift` receipt when an artifact's on-disk contentHash no longer matches.
+ */
 export async function openTask(baseDir: string, slug: string): Promise<OpenTaskResult> {
   validateSlug(slug);
   const taskDir = await taskDirFor(baseDir, slug);
   const manifest = await loadManifest(taskDir);
-  return { manifest, taskDir, migrationApplied: wasMigrationApplied(manifest) };
+  const migrationApplied = manifest.receipts.some((r) => r.kind === "migration");
+  // Persist a migrated manifest so legacy files stop re-migrating on every open.
+  if (migrationApplied) {
+    await saveManifest(taskDir, manifest);
+  }
+  // Drift check: contentHash vs file for each artifact.
+  for (const a of manifest.artifacts) {
+    try {
+      const h = await hashFile(join(taskDir, a.path));
+      if (h !== a.contentHash) {
+        manifest.receipts.push({
+          kind: "drift",
+          artifactId: a.id,
+          detail: "contentHash mismatch on open",
+          timestamp: new Date().toISOString(),
+        });
+        await saveManifest(taskDir, manifest);
+        break; // one drift receipt per open is enough
+      }
+    } catch {
+      // missing file — report as drift too
+      manifest.receipts.push({
+        kind: "drift",
+        artifactId: a.id,
+        detail: "artifact file missing on open",
+        timestamp: new Date().toISOString(),
+      });
+      await saveManifest(taskDir, manifest);
+      break;
+    }
+  }
+  return { manifest, taskDir, migrationApplied };
 }
 
 // ---------------------------------------------------------------------------
 // Migration
 // ---------------------------------------------------------------------------
-
-function wasMigrationApplied(manifest: TaskManifest): boolean {
-  return manifest.receipts.some((r) => r.kind === "migration");
-}
 
 /**
  * Migrate a legacy manifest that lacks `flow`/`receipts[]`.
@@ -284,10 +347,8 @@ export function migrateManifest(parsed: unknown, taskDir: string): TaskManifest 
   if (!raw || typeof raw !== "object") {
     throw new EngineError(`Malformed manifest at ${manifestPath(taskDir)}: not an object`);
   }
-  if (raw.schemaVersion === SCHEMA_VERSION) {
-    if (raw.flow && raw.receipts && Array.isArray(raw.artifacts)) {
-      return raw as TaskManifest;
-    }
+  if (raw.schemaVersion === SCHEMA_VERSION && raw.flow && raw.receipts && Array.isArray(raw.artifacts)) {
+    return raw as TaskManifest;
   }
   // Legacy / incomplete v1: seed with rpi flow and empty receipts
   const manifest = newManifest({
@@ -310,16 +371,46 @@ export function migrateManifest(parsed: unknown, taskDir: string): TaskManifest 
   return manifest;
 }
 
+/** Alias matching the plan's Engine API list. */
+export async function runMigration(parsed: unknown, taskDir: string): Promise<TaskManifest> {
+  return migrateManifest(parsed, taskDir);
+}
+
+// ---------------------------------------------------------------------------
+// Artifact lookup
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve an artifact by id or by logical type, preferring the active
+ * (non-superseded) version. First-version ids equal their type, so plain type
+ * lookups work until a supersession creates a `-vN` id.
+ */
+export function findArtifact(manifest: TaskManifest, idOrType: string): Artifact | undefined {
+  const byId = manifest.artifacts.find((a) => a.id === idOrType && a.status !== "superseded");
+  if (byId) return byId;
+  const byType = manifest.artifacts
+    .filter((a) => a.type === idOrType && a.status !== "superseded")
+    .sort((x, y) => (x.updatedAt < y.updatedAt ? 1 : -1));
+  return byType[0];
+}
+
+/** Flow validation with a friendly error message. */
+export function validateFlow(manifest: TaskManifest, type: ArtifactType): { ok: boolean; error?: string } {
+  return isTypeEnabled(manifest.flow, type)
+    ? { ok: true }
+    : { ok: false, error: `Artifact type "${type}" is not enabled in flow "${manifest.flow}". Change the task flow to enable it.` };
+}
+
 // ---------------------------------------------------------------------------
 // Artifact operations
 // ---------------------------------------------------------------------------
 
 export interface CreateArtifactInput {
   type: ArtifactType;
-  description: string; // 2-4 word kebab slug for the filename, e.g. "parent-child-tracking"
+  description: string; // flat kebab-case slug for the filename, e.g. "parent-child-tracking"
   dependsOn?: string[];
   content: string;
-  supersedes?: string;
+  supersedes?: string; // id (or logical type) of the artifact this replaces; must be approved
   status?: ArtifactStatus;
 }
 
@@ -329,110 +420,151 @@ export interface CreateArtifactResult {
   path: string;
 }
 
-/** Create an artifact (optionally persisting its file) inside a task. */
+/**
+ * Create an artifact (persisting its file + manifest) inside a task.
+ * The whole read-validate-mutate-persist sequence runs under a per-task lock
+ * with a fresh manifest read, so concurrent creates cannot collide on indexes
+ * or lose updates.
+ */
 export async function createArtifact(
   taskDir: string,
-  manifest: TaskManifest,
   input: CreateArtifactInput,
 ): Promise<CreateArtifactResult> {
-  // Flow validation
-  if (!isTypeEnabled(manifest.flow, input.type)) {
-    throw new EngineError(
-      `Artifact type "${input.type}" is not enabled in flow "${manifest.flow}". Change the task flow to enable it.`,
+  return withTaskLock(taskDir, async () => {
+    const manifest = await loadManifest(taskDir);
+
+    // Flow validation
+    const flowCheck = validateFlow(manifest, input.type);
+    if (!flowCheck.ok) throw new EngineError(flowCheck.error ?? "flow validation failed");
+
+    // Status: a newly created artifact cannot start superseded.
+    if (input.status === "superseded") {
+      throw new EngineError("A newly created artifact cannot start as superseded.");
+    }
+
+    // Description -> flat kebab filename slug
+    const desc = validateDescription(input.description);
+
+    // Duplicate-type rejection unless superseding
+    const activeSameType = manifest.artifacts.find(
+      (a) => a.type === input.type && a.status !== "superseded",
     );
-  }
-
-  // Dependency validation
-  for (const dep of input.dependsOn ?? []) {
-    const existing = manifest.artifacts.find((a) => a.id === dep);
-    if (!existing) {
-      throw new EngineError(`Dependency "${dep}" does not exist in this task.`);
+    if (activeSameType && !input.supersedes) {
+      throw new EngineError(
+        `Artifact type "${input.type}" already exists (${activeSameType.path}). Update it in place with rpi_update_artifact, or pass supersedes to replace it.`,
+      );
     }
-    if (!isPrecedenceEligible(existing.type) && existing.type !== "ticket") {
-      // research-questions dependency is allowed to produce research; handled below
+
+    // Supersede target: must exist and be approved (draft → superseded is invalid).
+    let supersedeId: string | undefined;
+    if (input.supersedes) {
+      const replaced = manifest.artifacts.find(
+        (a) => a.id === input.supersedes || (a.type === input.supersedes && a.status !== "superseded"),
+      );
+      if (!replaced) {
+        throw new EngineError(`supersedes target "${input.supersedes}" not found.`);
+      }
+      assertStatusTransition(replaced.status, "superseded", replaced.id);
+      supersedeId = replaced.id;
     }
-    if (existing.status === "draft" || existing.status === "in-review") {
-      // Allowed to depend on draft/in-review; plan/outline/implement may require approved.
-      // We do not hard-block here; the calling skill decides via precedence.
+
+    // Dependency validation: existence + upstream-in-chain + no self-dependency.
+    for (const dep of input.dependsOn ?? []) {
+      const depArt = manifest.artifacts.find((a) => a.id === dep);
+      if (!depArt) {
+        throw new EngineError(`Dependency "${dep}" does not exist in this task.`);
+      }
+      if (depArt.type === input.type) {
+        throw new EngineError(`Artifact cannot depend on itself (${input.type}).`);
+      }
+      const chain = FLOW_CHAINS[manifest.flow];
+      const di = chain.indexOf(depArt.type);
+      const ti = chain.indexOf(input.type);
+      if (di !== -1 && ti !== -1 && di >= ti) {
+        throw new EngineError(
+          `Dependency "${dep}" (${depArt.type}) is not upstream of "${input.type}" in the ${manifest.flow} flow.`,
+        );
+      }
     }
-  }
 
-  // Precedence: the new artifact's own type must be rendered from upstream, but we validate
-  // only that dependsOn entries are valid and stable. The precedence chain is
-  // resolved via resolvePrecedence() for reads.
+    // Index allocation from on-disk artifact paths (inside the lock).
+    const existingPaths = manifest.artifacts.map((a) => a.path);
+    const idx = nextIndex(existingPaths);
+    const filename = `${String(idx).padStart(2, "0")}-${desc}.md`;
+    const fullPath = join(taskDir, filename);
+    ensureWithin(taskDir, fullPath);
 
-  // Index allocation & name
-  const existingPaths = manifest.artifacts
-    .filter((a) => a.path !== "ticket" && a.path !== "00-ticket.md")
-    .map((a) => a.path);
-  const idx = nextIndex(existingPaths);
-  const filename = `${String(idx).padStart(2, "0")}-${input.description}.md`;
-  const fullPath = join(taskDir, filename);
-  ensureWithin(taskDir, fullPath);
+    const now = new Date().toISOString();
+    const contentHash = hashContent(input.content);
+    const versionCount = manifest.artifacts.filter((a) => a.type === input.type).length;
+    const id = versionCount === 0 ? input.type : `${input.type}-v${versionCount + 1}`;
+    const artifact: Artifact = {
+      id,
+      type: input.type,
+      path: filename,
+      status: input.status ?? "draft",
+      dependsOn: input.dependsOn ?? [],
+      supersedes: supersedeId,
+      contentHash,
+      updatedAt: now,
+    };
 
-  const now = new Date().toISOString();
-  const contentHash = hashContent(input.content);
-  const artifact: Artifact = {
-    id: input.type,
-    type: input.type,
-    path: filename,
-    status: input.status ?? "draft",
-    dependsOn: input.dependsOn ?? [],
-    supersedes: input.supersedes,
-    contentHash,
-    updatedAt: now,
-  };
+    // Persist file
+    await writeFile(fullPath, input.content, "utf8");
+    manifest.artifacts.push(artifact);
 
-  // Persist file
-  await writeFile(fullPath, input.content, "utf8");
-  manifest.artifacts.push(artifact);
-
-  // Supersede the replaced artifact
-  if (input.supersedes) {
-    const replaced = manifest.artifacts.find((a) => a.id === input.supersedes);
-    if (replaced) {
-      replaced.status = "superseded";
-      manifest.receipts.push({
-        kind: "status-change",
-        artifactId: replaced.id,
-        detail: `superseded by ${artifact.id}`,
-        timestamp: now,
-      });
+    // Supersede the replaced artifact (transition already validated)
+    if (supersedeId) {
+      const replaced = manifest.artifacts.find((a) => a.id === supersedeId);
+      if (replaced) {
+        replaced.status = "superseded";
+        manifest.receipts.push({
+          kind: "status-change",
+          artifactId: replaced.id,
+          detail: `superseded by ${artifact.id}`,
+          timestamp: now,
+        });
+      }
     }
-  }
 
-  await saveManifest(taskDir, manifest);
-  return { manifest, artifact, path: fullPath };
+    await saveManifest(taskDir, manifest);
+    return { manifest, artifact, path: fullPath };
+  });
 }
 
 /** Update an artifact's file and contentHash in place. Returns updated manifest + artifact. */
 export async function updateArtifact(
   taskDir: string,
-  manifest: TaskManifest,
   artifactId: string,
   content: string,
 ): Promise<{ manifest: TaskManifest; artifact: Artifact }> {
-  const artifact = manifest.artifacts.find((a) => a.id === artifactId);
-  if (!artifact) throw new EngineError(`Artifact "${artifactId}" not found.`);
+  return withTaskLock(taskDir, async () => {
+    const manifest = await loadManifest(taskDir);
+    const artifact = findArtifact(manifest, artifactId);
+    if (!artifact) throw new EngineError(`Artifact "${artifactId}" not found.`);
 
-  artifact.contentHash = hashContent(content);
-  artifact.updatedAt = new Date().toISOString();
-  await writeFile(join(taskDir, artifact.path), content, "utf8");
-  await saveManifest(taskDir, manifest);
-  return { manifest, artifact };
+    const abs = join(taskDir, artifact.path);
+    ensureWithin(taskDir, abs);
+    artifact.contentHash = hashContent(content);
+    artifact.updatedAt = new Date().toISOString();
+    await writeFile(abs, content, "utf8");
+    await saveManifest(taskDir, manifest);
+    return { manifest, artifact };
+  });
 }
 
-/** Set an artifact's status with transition validation. */
+/** Set an artifact's status with transition validation, persisting the manifest. */
 export async function setArtifactStatus(
   manifest: TaskManifest,
   artifactId: string,
   status: ArtifactStatus,
   taskDir?: string,
 ): Promise<TaskManifest> {
-  const artifact = manifest.artifacts.find((a) => a.id === artifactId);
+  const artifact = findArtifact(manifest, artifactId);
   if (!artifact) throw new EngineError(`Artifact "${artifactId}" not found.`);
 
   const from = artifact.status;
+  if (from === status) return manifest; // no-op: no receipt
   assertStatusTransition(from, status, artifactId);
   artifact.status = status;
   manifest.receipts.push({
@@ -442,6 +574,15 @@ export async function setArtifactStatus(
   });
   if (taskDir) await saveManifest(taskDir, manifest);
   return manifest;
+}
+
+/** Alias matching the plan's Engine API list. */
+export async function approve(
+  manifest: TaskManifest,
+  artifactId: string,
+  taskDir?: string,
+): Promise<TaskManifest> {
+  return setArtifactStatus(manifest, artifactId, "approved", taskDir);
 }
 
 export function assertStatusTransition(from: ArtifactStatus, to: ArtifactStatus, artifactId: string): void {
@@ -463,16 +604,18 @@ export function assertStatusTransition(from: ArtifactStatus, to: ArtifactStatus,
 
 /**
  * Resolve which artifacts are authoritative inputs for a given "from" type,
- * using the task flow's precedence chain. Only artifacts present in the task
- * participate; absent chain members simply do not count.
+ * using the task flow's precedence chain (newest first). Returns the chain
+ * members OLDER than `fromType` (or all members when `fromType` is not in the
+ * chain), preferring the active non-superseded artifact per type.
  */
 export function resolvePrecedence(manifest: TaskManifest, fromType: ArtifactType): Artifact[] {
-  const chain = FLOW_PRECEDENCE[manifest.flow];
-  const eligible = chain.filter((t) => isPrecedenceEligible(t));
+  const chain = FLOW_PRECEDENCE[manifest.flow].filter(isPrecedenceEligible);
+  const fromIdx = chain.indexOf(fromType);
+  const slice = fromIdx === -1 ? chain : chain.slice(fromIdx + 1);
   const result: Artifact[] = [];
-  for (const type of eligible) {
-    const a = manifest.artifacts.find((x) => x.type === type);
-    if (a && a.status !== "superseded") result.push(a);
+  for (const type of slice) {
+    const a = findArtifact(manifest, type);
+    if (a) result.push(a);
   }
   return result;
 }
@@ -500,6 +643,46 @@ export async function changeFlow(manifest: TaskManifest, flow: Flow, taskDir?: s
   });
   if (taskDir) await saveManifest(taskDir, manifest);
   return manifest;
+}
+
+// ---------------------------------------------------------------------------
+// Receipt helpers for the agent runtime
+// ---------------------------------------------------------------------------
+
+/** Record a subagent run id on an artifact (and save). */
+export async function recordRunId(
+  taskDir: string,
+  artifactId: string,
+  runId: string,
+): Promise<TaskManifest> {
+  return withTaskLock(taskDir, async () => {
+    const manifest = await loadManifest(taskDir);
+    const artifact = findArtifact(manifest, artifactId);
+    if (artifact) {
+      artifact.runIds = [...(artifact.runIds ?? []), runId];
+    }
+    await saveManifest(taskDir, manifest);
+    return manifest;
+  });
+}
+
+/** Record a phase-commit receipt (phase id + run id). */
+export async function recordPhaseCommit(
+  taskDir: string,
+  phaseId: string,
+  runId: string,
+): Promise<TaskManifest> {
+  return withTaskLock(taskDir, async () => {
+    const manifest = await loadManifest(taskDir);
+    manifest.receipts.push({
+      kind: "phase-commit",
+      phaseId,
+      runId,
+      timestamp: new Date().toISOString(),
+    });
+    await saveManifest(taskDir, manifest);
+    return manifest;
+  });
 }
 
 /** Validate a concrete path stays within the task dir (defense in depth). */

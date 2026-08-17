@@ -1,6 +1,6 @@
 ---
 name: setup-worktree
-description: Creates a git worktree for the active task from the workspace config, copying local files and running the setup command. Use before implementation when the project uses task worktrees; skips cleanly when disabled or already inside a worktree.
+description: "Creates a git worktree for the active task from the workspace config, copying local files and running the setup command. Use before implementation when the project uses task worktrees; skips cleanly when disabled or already inside a worktree."
 ---
 
 # Setup Worktree
@@ -24,7 +24,7 @@ Config shape:
       "description": "Primary repository",
       "sourceRef": "HEAD",
       "setupCommand": "",
-      "copyGlobs": [".env*", ".pi/settings.json"]
+      "copyGlobs": [".env*", ".pi/settings.json", ".pi/workspace.local.json"]
     }
   ]
 }

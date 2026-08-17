@@ -1,6 +1,6 @@
 ---
 name: create-prd
-description: Runs the product interview and writes the PRD artifact. Use in a prd-flow task after research, when product scope and success must be decided by the user before technical design.
+description: "Runs the product interview and writes the PRD artifact. Use in a prd-flow task after research, when product scope and success must be decided by the user before technical design."
 ---
 
 # Create PRD

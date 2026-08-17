@@ -1,6 +1,6 @@
 ---
 name: iterate-research-questions
-description: Updates the research-questions artifact in place from user feedback. Use when the user wants to change, add, or remove research questions for the active task.
+description: "Updates the research-questions artifact in place from user feedback. Use when the user wants to change, add, or remove research questions for the active task."
 ---
 
 # Iterate Research Questions

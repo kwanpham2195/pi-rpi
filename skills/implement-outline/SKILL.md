@@ -1,6 +1,6 @@
 ---
 name: implement-outline
-description: Orchestrates phased implementation directly from the structure outline using one outline-implementer agent per phase with human gates. Use after the outline is approved when no detailed plan exists.
+description: "Orchestrates phased implementation directly from the structure outline using one outline-implementer agent per phase with human gates. Use after the outline is approved when no detailed plan exists."
 ---
 
 # Implement Outline

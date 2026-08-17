@@ -32,12 +32,14 @@ export function rpcCall(pi: ExtensionAPI, method: string, params: Record<string,
   return new Promise((resolvePromise, rejectPromise) => {
     const requestId = crypto.randomUUID();
     const eventName = `subagents:rpc:v1:reply:${requestId}`;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const unsub = pi.events.on(eventName, (data: unknown) => {
+      if (timer) clearTimeout(timer);
       unsub();
       resolvePromise(data as RpcReply);
     });
     pi.events.emit("subagents:rpc:v1:request", { version: 1, requestId, method, params });
-    setTimeout(() => {
+    timer = setTimeout(() => {
       unsub();
       rejectPromise(new Error(`RPC ${method} timed out`));
     }, 20_000);
@@ -48,6 +50,7 @@ async function waitForCompletion(pi: ExtensionAPI, runId: string, timeoutMs = 24
   const deadline = Date.now() + timeoutMs;
   let state = "running";
   let lastPayload: unknown;
+  let deadlineHit = true;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 2000));
     const status = await rpcCall(pi, "status", { id: runId });
@@ -55,9 +58,15 @@ async function waitForCompletion(pi: ExtensionAPI, runId: string, timeoutMs = 24
       lastPayload = status.data;
       state = status.data.state;
       if (["complete", "completed", "failed", "blocked", "stopped", "aborted"].includes(state)) {
+        deadlineHit = false;
         break;
       }
     }
+  }
+  if (deadlineHit && state === "running") {
+    throw agentUnavailableError(
+      new Error(`child run ${runId} did not reach a terminal state within ${timeoutMs}ms`),
+    );
   }
   if (["failed", "blocked", "aborted"].includes(state)) {
     const text = JSON.stringify(lastPayload ?? "");
@@ -73,9 +82,11 @@ async function waitForCompletion(pi: ExtensionAPI, runId: string, timeoutMs = 24
 /** Surface a friendly, actionable error when the package agents are not registered. */
 export function agentUnavailableError(err: unknown): Error {
   const msg = err instanceof Error ? err.message : String(err);
-  if (/unknown agent|agent.*not.*regist|no such agent|invalid agent/i.test(msg)) {
+  if (
+    /unknown agent|agent.*not.*regist|no such agent|invalid agent|timed out|did not reach a terminal state/i.test(msg)
+  ) {
     return new Error(
-      `The pi-artifacts agents are not registered. They are only discoverable when the package is installed (pi install <pkg> or pi install -l <pkg> for a project), not when loaded with -e. Install the package, then retry.`,
+      `The pi-artifacts agents could not run (${msg}). They are only discoverable when the package is installed (pi install <pkg> or pi install -l <pkg> for a project), not when loaded with -e. Install the package and ensure pi-subagents is present, then retry.`,
     );
   }
   return err instanceof Error ? err : new Error(msg);

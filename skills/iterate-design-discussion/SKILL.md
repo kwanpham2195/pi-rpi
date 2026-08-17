@@ -1,6 +1,6 @@
 ---
 name: iterate-design-discussion
-description: Updates the design-discussion artifact in place from user decisions or corrections. Use when the user answers a design question or corrects the design.
+description: "Updates the design-discussion artifact in place from user decisions or corrections. Use when the user answers a design question or corrects the design."
 ---
 
 # Iterate Design Discussion

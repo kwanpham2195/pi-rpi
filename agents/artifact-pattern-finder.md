@@ -1,6 +1,6 @@
 ---
 name: artifact-pattern-finder
-description: Finds existing implementation and test patterns to model new work after, returning working code plus locations. Use inside the research fanout to ground design in the codebase's own conventions.
+description: "Finds existing implementation and test patterns to model new work after, returning working code plus locations. Use inside the research fanout to ground design in the codebase's own conventions."
 tools: read, bash, grep, ffgrep, fffind, ls
 thinking: medium
 systemPromptMode: replace

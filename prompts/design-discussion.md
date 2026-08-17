@@ -1,6 +1,6 @@
 ---
 name: artifact-design-discussion
-description: Skeleton for the design-discussion document in a pi-artifacts task.
+description: "Skeleton for the design-discussion document in a pi-artifacts task."
 ---
 
 # Design Discussion: <Topic>

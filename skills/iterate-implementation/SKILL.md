@@ -1,6 +1,6 @@
 ---
 name: iterate-implementation
-description: Applies follow-up fixes to implemented work for the active task. Use when the user reports bugs or changes after implementation phases landed; unstarted phases still go through the implementer.
+description: "Applies follow-up fixes to implemented work for the active task. Use when the user reports bugs or changes after implementation phases landed; unstarted phases still go through the implementer."
 ---
 
 # Iterate Implementation
@@ -19,7 +19,7 @@ Apply follow-up work on an implemented task: bug fixes, feedback, or small chang
    - A bug: ask for reproduction steps or logs; reproduce before fixing.
    - Multiple approaches: ask the user which to take.
 3. Apply the fix, then run the relevant tests and linting.
-4. Unstarted phases must go through `rpi_implement_phase` with the implementer — never implement a whole unstarted phase inline.
+4. Unstarted phases must go through `rpi_implement_phase` — never implement a whole unstarted phase inline. Use agent `artifact-implementer` when a `plan` artifact exists, otherwise `artifact-outline-implementer`.
 5. Update the plan's checkboxes if a phase completed.
 
 ## Final response

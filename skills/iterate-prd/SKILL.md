@@ -1,6 +1,6 @@
 ---
 name: iterate-prd
-description: Updates the PRD artifact in place as product decisions evolve. Use when the user gives feedback, wants more grilling, or surfaces questions on the PRD.
+description: "Updates the PRD artifact in place as product decisions evolve. Use when the user gives feedback, wants more grilling, or surfaces questions on the PRD."
 ---
 
 # Iterate PRD

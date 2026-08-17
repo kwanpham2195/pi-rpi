@@ -1,6 +1,6 @@
 ---
 name: artifact-implementation-reviewer
-description: Compares the authoritative plan against base...HEAD and reports deviations, additions, and unimplemented items for PR descriptions. Read-only; makes no changes and no approvals.
+description: "Compares the authoritative plan against base...HEAD and reports deviations, additions, and unimplemented items for PR descriptions. Read-only; makes no changes and no approvals."
 tools: read, bash, grep, ffgrep, fffind, ls
 thinking: medium
 systemPromptMode: replace

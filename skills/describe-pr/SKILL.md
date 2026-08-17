@@ -1,6 +1,6 @@
 ---
 name: describe-pr
-description: Writes the PR description for the active task, with plan-vs-implementation deviation review and an optional walkthrough. Use after implementation when the user asks to describe or open the PR.
+description: "Writes the PR description for the active task, with plan-vs-implementation deviation review and an optional walkthrough. Use after implementation when the user asks to describe or open the PR."
 ---
 
 # Describe PR

@@ -1,6 +1,6 @@
 ---
 name: artifact-structure-outline
-description: Skeleton for the structure-outline document in a pi-artifacts task.
+description: "Skeleton for the structure-outline document in a pi-artifacts task."
 ---
 
 # Structure Outline: <Feature>

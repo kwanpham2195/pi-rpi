@@ -2,7 +2,14 @@
  * Artifact protocol types: manifest schema v1.
  *
  * Authoritative contracts come from the ExecPlan's "Manifest schema v1" and
- * "Flow tables" sections (.agents/tasks/pi-artifacts/04-pi-artifact-workflow-plan.md).
+ * "Flow tables" sections (.agents/tasks/pi-artifacts/04-pi-artifact-workflow-plan.md),
+ * with two documented refinements from review:
+ * - `plan` is the newest member of rpi/prd precedence (skills and README state
+ *   `plan > outline > ...`).
+ * - `mockup` and `diagram` are AUXILIARY supporting artifacts allowed in
+ *   rpi/prd/oneshot (create-prd/create-tdd produce them) even though the plan's
+ *   chains list only the document spine. `ticket` is created by `createTask`,
+ *   not via a flow chain, so it is not listed in the rpi/prd chains.
  */
 
 export type ArtifactType =
@@ -36,18 +43,19 @@ export interface Receipt {
   kind: ReceiptKind;
   artifactId?: string;
   phaseId?: string;
+  runId?: string;
   commitSha?: string;
   detail?: string;
   timestamp: string;
 }
 
 export interface Artifact {
-  id: string; // slug-unique artifact id within a task
+  id: string; // unique id; for the first version of a type it equals the type
   type: ArtifactType;
   path: string; // relative to the task dir
   status: ArtifactStatus;
   dependsOn: string[]; // artifact ids this artifact depends on
-  supersedes?: string; // artifact id this replaced
+  supersedes?: string; // artifact id this replaced (older version)
   contentHash: string;
   updatedAt: string;
   runIds?: string[]; // subagent run IDs that produced evidence for it
@@ -84,10 +92,12 @@ export const ARTIFACT_TYPES: ArtifactType[] = [
   "pr-description",
 ];
 
-/** Flow chains: enabled artifact types in logical order. */
+/**
+ * Flow chains: enabled artifact types. `plan` is optional on top of outline in
+ * rpi/prd; `mockup`/`diagram` are auxiliary supporting artifacts.
+ */
 export const FLOW_CHAINS: Record<Flow, ArtifactType[]> = {
   rpi: [
-    "ticket",
     "research-questions",
     "research",
     "design-discussion",
@@ -95,11 +105,10 @@ export const FLOW_CHAINS: Record<Flow, ArtifactType[]> = {
     "plan", // optional
     "implementation",
     "pr-description",
-    "mockup",
-    "diagram",
+    "mockup", // auxiliary
+    "diagram", // auxiliary
   ],
   prd: [
-    "ticket",
     "research-questions",
     "research",
     "prd",
@@ -108,8 +117,8 @@ export const FLOW_CHAINS: Record<Flow, ArtifactType[]> = {
     "plan", // optional
     "implementation",
     "pr-description",
-    "mockup",
-    "diagram",
+    "mockup", // auxiliary
+    "diagram", // auxiliary
   ],
   oneshot: ["ticket", "implementation", "pr-description", "mockup", "diagram"],
   freeform: [...ARTIFACT_TYPES],
@@ -117,12 +126,12 @@ export const FLOW_CHAINS: Record<Flow, ArtifactType[]> = {
 
 /**
  * Effective precedence per flow (newest wins). Research-questions are excluded
- * from precedence in every flow.
+ * from precedence in every flow. `plan` is the newest member when present.
  */
 export const FLOW_PRECEDENCE: Record<Flow, ArtifactType[]> = {
-  rpi: ["structure-outline", "design-discussion", "research", "ticket"],
-  prd: ["structure-outline", "tdd", "prd", "research", "ticket"],
-  oneshot: ["ticket"],
+  rpi: ["plan", "structure-outline", "design-discussion", "research", "ticket"],
+  prd: ["plan", "structure-outline", "tdd", "prd", "research", "ticket"],
+  oneshot: [],
   freeform: [],
 };
 

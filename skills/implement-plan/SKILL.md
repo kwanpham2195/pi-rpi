@@ -1,6 +1,6 @@
 ---
 name: implement-plan
-description: Orchestrates phased implementation of the plan using one implementer agent per phase with human gates. Use after the plan is approved; the plan is the source of truth for each phase.
+description: "Orchestrates phased implementation of the plan using one implementer agent per phase with human gates. Use after the plan is approved; the plan is the source of truth for each phase."
 ---
 
 # Implement Plan

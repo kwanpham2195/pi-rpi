@@ -34,8 +34,10 @@ Flow presets:
 ```text
 rpi:     research-questions → research → design-discussion → structure-outline → (plan, optional) → implement → PR
 prd:     research-questions → research → prd → tdd → structure-outline → (plan, optional) → implement → PR
-oneshot: implement → PR
+oneshot: ticket → implementation → pr-description
 freeform: no enforced chain
+
+`mockup` and `diagram` are auxiliary supporting artifacts available in rpi/prd/oneshot (create-prd/create-tdd produce them); `ticket` is created at task creation, not via the chain.
 ```
 
 ## Commands
@@ -54,7 +56,7 @@ freeform: no enforced chain
 - `rpi_create_task` — create a task with slug, title, flow, ticket.
 - `rpi_get_task_context` — select the active task.
 - `rpi_list_artifacts`, `rpi_read_artifact` — inspect.
-- `rpi_create_artifact` — create a document; validates flow + dependencies, assigns the next `NN-` name, writes the manifest atomically.
+- `rpi_create_artifact` — create a document; validates flow + dependencies, assigns the next `NN-` name, writes the file and the manifest under a per-task lock.
 - `rpi_update_artifact` — update in place with content hashing.
 - `rpi_set_artifact_status` — draft → in-review → approved → superseded, with transition validation and receipts.
 - `rpi_start_research` — 2-6 parallel fresh read-only research children (needs install).

@@ -1,6 +1,6 @@
 ---
 name: artifact-outline-implementer
-description: Turns one phase of a structure-outline into code without a detailed plan. Runs automated checks, updates checkbox progress in the outline document, and pauses for the human's manual verification. One writer at a time.
+description: "Turns one phase of a structure-outline into code without a detailed plan. Runs automated checks, updates checkbox progress in the outline document, and pauses for the human's manual verification. One writer at a time."
 tools: read, bash, edit, write, grep, ffgrep, fffind, ls, contact_supervisor
 thinking: medium
 systemPromptMode: replace

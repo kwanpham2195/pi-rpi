@@ -1,6 +1,6 @@
 ---
 name: artifact-implementer
-description: Implements exactly one approved phase of the active task's plan. Runs automated checks, pauses for the human's manual verification gate, and never advances phases or commits without approval. One writer at a time.
+description: "Implements exactly one approved phase of the active task's plan. Runs automated checks, pauses for the human's manual verification gate, and never advances phases or commits without approval. One writer at a time."
 tools: read, bash, edit, write, grep, ffgrep, fffind, ls, contact_supervisor
 thinking: medium
 systemPromptMode: replace

@@ -1,6 +1,6 @@
 ---
 name: artifact-web-researcher
-description: Runs web/documentation research for libraries, dependencies, and best practices with citations and links. Use when the research fanout needs external sources.
+description: "Runs web/documentation research for libraries, dependencies, and best practices with citations and links. Use when the research fanout needs external sources."
 tools: web_search, fetch_content, get_search_content, bash, read
 thinking: medium
 systemPromptMode: replace

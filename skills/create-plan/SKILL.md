@@ -1,6 +1,6 @@
 ---
 name: create-plan
-description: Converts the structure outline into a detailed implementation plan with exact code shapes and runnable verification. Use before phased implementation when a detailed plan is wanted (plan is optional on top of the outline).
+description: "Converts the structure outline into a detailed implementation plan with exact code shapes and runnable verification. Use before phased implementation when a detailed plan is wanted (plan is optional on top of the outline)."
 ---
 
 # Create Plan
@@ -16,7 +16,7 @@ Precedence: plan > structure outline > TDD > PRD > design discussion > research 
 
 ## Process
 
-1. Read all task artifacts fully, plus the relevant source files named by the outline.
+1. Read the `structure-outline`, `design-discussion` (rpi flow) or `tdd`/`prd` (prd flow), `research`, and `ticket` artifacts fully with `rpi_read_artifact` — never `research-questions` — plus the relevant source files named by the outline.
 2. Create the artifact: `rpi_create_artifact` with type `plan`, description `<topic>`, content from the `artifact-plan` template.
 3. For each outline phase, write:
    - Overview of what lands.

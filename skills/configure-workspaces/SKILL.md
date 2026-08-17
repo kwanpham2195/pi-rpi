@@ -1,6 +1,6 @@
 ---
 name: configure-workspaces
-description: Writes the .pi/workspace.json and .pi/workspace.local.json worktree config for a project. Use when the user wants to set up or change task worktree behavior, including multi-repo setups.
+description: "Writes the .pi/workspace.json and .pi/workspace.local.json worktree config for a project. Use when the user wants to set up or change task worktree behavior, including multi-repo setups."
 ---
 
 # Configure Workspaces

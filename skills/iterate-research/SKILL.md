@@ -1,6 +1,6 @@
 ---
 name: iterate-research
-description: Updates the research artifact in place from corrections or new findings. Use when research needs to reflect changed understanding of the codebase.
+description: "Updates the research artifact in place from corrections or new findings. Use when research needs to reflect changed understanding of the codebase."
 ---
 
 # Iterate Research

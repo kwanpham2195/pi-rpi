@@ -1,7 +1,7 @@
 ---
 name: artifact-locator
-description: Finds WHERE code lives in the active task's codebase. Returns categorized file paths (implementation, tests, config, entry points) with no content analysis. Use for the research fanout when a task needs to know what exists before analyzing it.
-tools: read, bash, grep, ffgrep, fffind, ls
+description: "Finds WHERE code lives in the active task's codebase. Returns categorized file paths (implementation, tests, config, entry points) with no content analysis. Use for the research fanout when a task needs to know what exists before analyzing it."
+tools: bash, grep, ffgrep, fffind, ls
 thinking: medium
 systemPromptMode: replace
 inheritProjectContext: true
