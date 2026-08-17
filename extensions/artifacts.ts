@@ -23,8 +23,7 @@ import {
   tryLoadManifest,
   updateArtifact,
 } from "../src/engine/index.ts";
-import { resolveArtifactPath } from "../src/paths.ts";
-import { ARTIFACT_ROOT } from "../src/paths.ts";
+import { isWithinRoot, resolveArtifactPath } from "../src/paths.ts";
 
 export const DEFAULT_ROOT = ".pi/artifacts";
 
@@ -63,6 +62,43 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
         display: true,
       },
     };
+  });
+
+  // ---------------------------------------------------------------
+  // Tool: select the active task (persisted via tool details)
+  // ---------------------------------------------------------------
+  pi.registerTool({
+    name: "rpi_create_task",
+    label: "RPI Create Task",
+    description:
+      "Create a new task with the given slug, title, flow, and optional ticket body. Idempotent (returns existing task if present). Sets it as the active task.",
+    promptSnippet: "rpi_create_task — create a task and select it",
+    promptGuidelines: [
+      "Use rpi_create_task with the desired flow (rpi, prd, oneshot, freeform) before creating artifacts.",
+    ],
+    parameters: Type.Object({
+      slug: Type.String({ description: "Task slug, kebab-case" }),
+      title: Type.String({ description: "Human-readable task title" }),
+      flow: StringEnum(["rpi", "prd", "oneshot", "freeform"] as const),
+      baseBranch: Type.Optional(Type.String({ description: "Base branch (default main)" })),
+      ticketBody: Type.Optional(Type.String({ description: "Optional initial ticket markdown body" })),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const root = artifactRoot(ctx.cwd);
+      const manifest = await createTask(root, {
+        slug: params.slug,
+        title: params.title,
+        flow: params.flow,
+        baseBranch: params.baseBranch ?? "main",
+        ticketBody: params.ticketBody,
+      });
+      ctx.ui.setStatus("rpi-active", `${params.slug} · ${params.flow}`);
+      ctx.ui.setWidget("rpi-active", [`Task ${params.slug} (${params.flow})`, "next: create research-questions"]);
+      return {
+        content: [{ type: "text", text: `Task created/selected: ${params.slug} (${params.flow})` }],
+        details: { taskSlug: params.slug, flow: params.flow },
+      };
+    },
   });
 
   // ---------------------------------------------------------------
@@ -425,14 +461,11 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
     if (!isWrite && !isEdit) return;
     const raw = (event.input as { path?: unknown }).path;
     if (typeof raw !== "string") return;
-    const root = resolveArtifactPath(ctx.cwd, raw);
+    const target = resolveArtifactPath(ctx.cwd, raw);
     const rootBase = resolve(ctx.cwd, DEFAULT_ROOT);
-    if (relative(rootBase, root).startsWith("..") === false && root !== rootBase) {
-      const rel = relative(rootBase, root);
-      if (rel !== "" && !rel.startsWith("..")) {
-        ctx.ui.notify(`Unmanaged write into artifact root: ${raw}. Prefer rpi_* tools.`, "warning");
-        console.error(`RPI_WARN unmanaged artifact write: ${raw}`);
-      }
+    if (isWithinRoot(rootBase, target)) {
+      ctx.ui.notify(`Unmanaged write into artifact root: ${raw}. Prefer rpi_* tools.`, "warning");
+      console.error(`RPI_WARN unmanaged artifact write: ${raw}`);
     }
   });
 }

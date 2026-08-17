@@ -15,7 +15,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { isToolCallEventType, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -58,20 +58,6 @@ export default function protoExtension(pi: ExtensionAPI): void {
         display: true,
       },
     };
-  });
-
-  pi.on("tool_call", async (event, ctx) => {
-    const isWrite = isToolCallEventType("write", event);
-    const isEdit = isToolCallEventType("edit", event);
-    if (!isWrite && !isEdit) return;
-    const raw = (event.input as { path?: unknown }).path;
-    if (typeof raw !== "string") return;
-    const root = resolve(ctx.cwd, ARTIFACT_ROOT);
-    const target = resolveArtifactPath(ctx.cwd, raw);
-    if (isWithinRoot(root, target)) {
-      console.error(`RPI_PROTO_WARN unmanaged write into artifact root: ${raw}`);
-      ctx.ui.notify(`Unmanaged write into artifact root: ${raw}`, "warning");
-    }
   });
 
   pi.registerTool({
