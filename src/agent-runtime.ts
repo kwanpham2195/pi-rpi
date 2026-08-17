@@ -47,17 +47,38 @@ export function rpcCall(pi: ExtensionAPI, method: string, params: Record<string,
 async function waitForCompletion(pi: ExtensionAPI, runId: string, timeoutMs = 240_000): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   let state = "running";
+  let lastPayload: unknown;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 2000));
     const status = await rpcCall(pi, "status", { id: runId });
     if (status.success && status.data?.state) {
+      lastPayload = status.data;
       state = status.data.state;
       if (["complete", "completed", "failed", "blocked", "stopped", "aborted"].includes(state)) {
         break;
       }
     }
   }
+  if (["failed", "blocked", "aborted"].includes(state)) {
+    const text = JSON.stringify(lastPayload ?? "");
+    if (/unknown agent|agent.*not.*regist|no such agent|invalid agent/i.test(text)) {
+      throw agentUnavailableError(
+        new Error(`child run ${runId} ended ${state}: ${text.slice(0, 400)}`),
+      );
+    }
+  }
   return state;
+}
+
+/** Surface a friendly, actionable error when the package agents are not registered. */
+export function agentUnavailableError(err: unknown): Error {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/unknown agent|agent.*not.*regist|no such agent|invalid agent/i.test(msg)) {
+    return new Error(
+      `The pi-artifacts agents are not registered. They are only discoverable when the package is installed (pi install <pkg> or pi install -l <pkg> for a project), not when loaded with -e. Install the package, then retry.`,
+    );
+  }
+  return err instanceof Error ? err : new Error(msg);
 }
 
 /**
@@ -79,7 +100,7 @@ export async function startResearch(
     .join(",\n        ");
   const script = `return runs.all([\n        ${items}\n      ])`;
   const spawn = await rpcCall(pi, "spawn", { workflowScript: script, context: "fresh" });
-  if (!spawn.success) throw new Error(`research spawn failed: ${JSON.stringify(spawn.error)}`);
+  if (!spawn.success) throw agentUnavailableError(new Error(`research spawn failed: ${JSON.stringify(spawn.error)}`));
   const runId = spawn.data?.runId ?? spawn.data?.id ?? "";
   if (!runId) throw new Error(`research spawn reply without runId: ${JSON.stringify(spawn.data)}`);
   const state = await waitForCompletion(pi, runId);
@@ -98,7 +119,7 @@ export async function implementPhase(
 ): Promise<RunReceipt> {
   const script = `return runs.run("main", { agent: ${JSON.stringify(agent)}, task: ${JSON.stringify(phaseTask)}, context: "fresh", cwd: ${JSON.stringify(cwd)} })`;
   const spawn = await rpcCall(pi, "spawn", { workflowScript: script, context: "fresh" });
-  if (!spawn.success) throw new Error(`implement spawn failed: ${JSON.stringify(spawn.error)}`);
+  if (!spawn.success) throw agentUnavailableError(new Error(`implement spawn failed: ${JSON.stringify(spawn.error)}`));
   const runId = spawn.data?.runId ?? spawn.data?.id ?? "";
   if (!runId) throw new Error(`implement spawn reply without runId: ${JSON.stringify(spawn.data)}`);
   const state = await waitForCompletion(pi, runId);
@@ -115,7 +136,7 @@ export async function reviewImplementation(
 ): Promise<RunReceipt> {
   const script = `return runs.run("main", { agent: "artifact-implementation-reviewer", task: ${JSON.stringify(task)}, context: "fresh", cwd: ${JSON.stringify(cwd)} })`;
   const spawn = await rpcCall(pi, "spawn", { workflowScript: script, context: "fresh" });
-  if (!spawn.success) throw new Error(`review spawn failed: ${JSON.stringify(spawn.error)}`);
+  if (!spawn.success) throw agentUnavailableError(new Error(`review spawn failed: ${JSON.stringify(spawn.error)}`));
   const runId = spawn.data?.runId ?? spawn.data?.id ?? "";
   if (!runId) throw new Error(`review spawn reply without runId: ${JSON.stringify(spawn.data)}`);
   const state = await waitForCompletion(pi, runId);
