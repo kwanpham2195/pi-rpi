@@ -5,9 +5,10 @@
  * - registerTool with typebox StringEnum parameters, writing through withFileMutationQueue
  * - registerCommand with getArgumentCompletions
  * - tool_call warning for unmanaged writes into the artifact root
- * - setStatus + setWidget
+ * - setStatus + setWidget, re-rendered on both session_start and command runs
  * - before_agent_start message injection (participates in LLM context)
- * - appendEntry persistence + session_start restore
+ * - state persistence via tool-result `details` + session_start restore (the canonical
+ *   `todo.ts` pattern: store full state in tool result details, rebuild in session_start)
  *
  * Marker convention: console.error("RPI_PROTO: ...") lines are greppable proof
  * markers for non-interactive smoke runs.
@@ -23,21 +24,29 @@ import { ARTIFACT_ROOT, isWithinRoot, resolveArtifactPath } from "../src/paths.t
 
 let protoCount = 0;
 
+/** Rebuild in-memory state from session tool-result details (todo.ts pattern). */
 function restoreProtoState(ctx: ExtensionContext): void {
   let count = 0;
-  for (const entry of ctx.sessionManager.getEntries()) {
-    if (entry.type === "custom" && entry.customType === "rpi-proto") {
-      count = (entry.data as { count?: number } | undefined)?.count ?? 0;
+  for (const entry of ctx.sessionManager.getBranch()) {
+    if (entry.type !== "message") continue;
+    if (entry.message.role !== "toolResult") continue;
+    const details = entry.message.details as { count?: number } | undefined;
+    if (details && typeof details.count === "number") {
+      count = details.count;
     }
   }
   protoCount = count;
 }
 
+function renderProtoUi(ctx: ExtensionContext): void {
+  ctx.ui.setStatus("rpi-proto", `proto count ${protoCount}`);
+  ctx.ui.setWidget("rpi-proto", ["rpi-proto active", `appendEntry count: ${protoCount}`]);
+}
+
 export default function protoExtension(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     restoreProtoState(ctx);
-    ctx.ui.setStatus("rpi-proto", `proto count ${protoCount}`);
-    ctx.ui.setWidget("rpi-proto", ["rpi-proto active", `appendEntry count: ${protoCount}`]);
+    renderProtoUi(ctx);
   });
 
   pi.on("before_agent_start", async (_event, _ctx) => {
@@ -63,6 +72,23 @@ export default function protoExtension(pi: ExtensionAPI): void {
       console.error(`RPI_PROTO_WARN unmanaged write into artifact root: ${raw}`);
       ctx.ui.notify(`Unmanaged write into artifact root: ${raw}`, "warning");
     }
+  });
+
+  pi.registerTool({
+    name: "rpi_proto_bump",
+    label: "Proto Bump",
+    description:
+      "Increment the prototype counter and return it in tool-result details so session_start can restore it.",
+    promptSnippet: "rpi_proto_bump — increment and persist the proto counter via details",
+    promptGuidelines: ["Use rpi_proto_bump to advance the prototype counter state."],
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
+      protoCount += 1;
+      return {
+        content: [{ type: "text", text: `Proto count is now ${protoCount}` }],
+        details: { count: protoCount },
+      };
+    },
   });
 
   pi.registerTool({
@@ -108,6 +134,7 @@ export default function protoExtension(pi: ExtensionAPI): void {
     handler: async (args, ctx) => {
       protoCount += 1;
       pi.appendEntry("rpi-proto", { count: protoCount, args });
+      renderProtoUi(ctx);
       ctx.ui.notify(`rpi-proto ran with args: ${args} (count ${protoCount})`, "info");
     },
   });
