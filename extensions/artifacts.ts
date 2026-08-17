@@ -489,14 +489,47 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
   pi.on("tool_call", async (event, ctx) => {
     const isWrite = isToolCallEventType("write", event);
     const isEdit = isToolCallEventType("edit", event);
-    if (!isWrite && !isEdit) return;
-    const raw = (event.input as { path?: unknown }).path;
-    if (typeof raw !== "string") return;
-    const target = resolveArtifactPath(ctx.cwd, raw);
-    const rootBase = resolve(ctx.cwd, DEFAULT_ROOT);
-    if (isWithinRoot(rootBase, target)) {
-      ctx.ui.notify(`Unmanaged write into artifact root: ${raw}. Prefer rpi_* tools.`, "warning");
-      console.error(`RPI_WARN unmanaged artifact write: ${raw}`);
+    if (isWrite || isEdit) {
+      const raw = (event.input as { path?: unknown }).path;
+      if (typeof raw === "string") {
+        const target = resolveArtifactPath(ctx.cwd, raw);
+        const rootBase = resolve(ctx.cwd, DEFAULT_ROOT);
+        if (isWithinRoot(rootBase, target)) {
+          ctx.ui.notify(`Unmanaged write into artifact root: ${raw}. Prefer rpi_* tools.`, "warning");
+          console.error(`RPI_WARN unmanaged artifact write: ${raw}`);
+        }
+      }
+    }
+    // Commit guard: refuse `git add` of paths under the artifact root.
+    if (isToolCallEventType("bash", event)) {
+      const cmd = (event.input as { command?: unknown }).command;
+      if (typeof cmd === "string" && /\bgit\s+add\b/.test(cmd)) {
+        const rootBase = resolve(ctx.cwd, DEFAULT_ROOT);
+        // any explicit path argument under the artifact root triggers the guard
+        const addPaths = cmd.replace(/^.*\bgit\s+add\b/, "").trim();
+        const hits = addPaths
+          .split(/\s+/)
+          .filter(Boolean)
+          .some((p) => isWithinRoot(rootBase, resolveArtifactPath(ctx.cwd, p)));
+        if (hits) {
+          return {
+            block: true,
+            reason: `Refusing to stage the artifact root (${DEFAULT_ROOT}). Task artifacts belong in the artifact store, not the implementation repo. Use ci-commit to stage explicit paths only.`,
+          };
+        }
+        // `git add -A` / `git add .` is only safe when the root is gitignored.
+        if (/\bgit\s+add\s+(-A|\.|--all)\b/.test(cmd)) {
+          try {
+            const { execSync } = await import("node:child_process");
+            execSync(`git check-ignore ${JSON.stringify(rootBase)}`, { cwd: ctx.cwd, stdio: "ignore" });
+          } catch {
+            return {
+              block: true,
+              reason: `Refusing \`git add -A\` / \`git add .\` while the artifact root (${DEFAULT_ROOT}) is not gitignored. Run /rpi-init to add the ignore entry, or stage explicit paths (see ci-commit).`,
+            };
+          }
+        }
+      }
     }
   });
 }
