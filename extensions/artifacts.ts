@@ -22,6 +22,7 @@ import {
   manifestPath,
   tryLoadManifest,
   updateArtifact,
+  validateSlug,
 } from "../src/engine/index.ts";
 import { isWithinRoot, resolveArtifactPath } from "../src/paths.ts";
 import { implementPhase, reviewImplementation, startResearch } from "../src/agent-runtime.ts";
@@ -408,6 +409,56 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
         await writeFile(ctx.cwd + "/.gitignore", `${DEFAULT_ROOT}\n`, "utf8");
       }
       await ctx.ui.notify(`Artifact root ready at ${DEFAULT_ROOT}`, "info");
+    },
+  });
+
+  pi.registerCommand("rpi-new", {
+    description: "Create a new task with a guided form: flow, slug, title, base branch, and ticket body. Structured alternative to describing the task in plain language.",
+    handler: async (_args, ctx) => {
+      const root = artifactRoot(ctx.cwd);
+
+      const flow = await ctx.ui.select("Flow:", ["rpi", "prd", "oneshot", "freeform"]);
+      if (!flow) {
+        await ctx.ui.notify("Cancelled.", "info");
+        return;
+      }
+
+      const slug = await ctx.ui.input("Task slug (kebab-case):", "eng-1234-example");
+      if (!slug) {
+        await ctx.ui.notify("Cancelled.", "info");
+        return;
+      }
+      try {
+        validateSlug(slug);
+      } catch (err) {
+        await ctx.ui.notify(`Invalid slug: ${err instanceof Error ? err.message : String(err)}`, "warning");
+        return;
+      }
+
+      const dir = taskDir(root, slug);
+      const existing = await tryLoadManifest(dir);
+      if (existing) {
+        ctx.ui.setStatus("rpi-active", `${slug} · ${existing.flow}`);
+        ctx.ui.setWidget("rpi-active", [`Task ${slug} (${existing.flow})`, "reopened existing task"]);
+        await ctx.ui.notify(`Task "${slug}" already exists — reopened.`, "info");
+        return;
+      }
+
+      const title = (await ctx.ui.input("Title:", slug)) || slug;
+      const baseBranch = (await ctx.ui.input("Base branch:", "main")) || "main";
+      const ticketBody = await ctx.ui.editor("Ticket body (optional markdown):", "");
+
+      await createTask(root, {
+        slug,
+        title,
+        flow: flow as "rpi" | "prd" | "oneshot" | "freeform",
+        baseBranch,
+        ticketBody: ticketBody ? ticketBody : undefined,
+      });
+
+      ctx.ui.setStatus("rpi-active", `${slug} · ${flow}`);
+      ctx.ui.setWidget("rpi-active", [`Task ${slug} (${flow})`, "next: create research-questions (rpi/prd) or implementation (oneshot)"]);
+      await ctx.ui.notify(`Task "${slug}" created (${flow}).`, "info");
     },
   });
 

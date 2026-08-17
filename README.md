@@ -43,7 +43,8 @@ freeform: no enforced chain
 | Command | Purpose |
 |---------|---------|
 | `/rpi-init` | Create `.pi/artifacts/`, append the gitignore entry. Idempotent. |
-| `/rpi-task <slug>` | Select or create the active task. |
+| `/rpi-new` | Structured task creation wizard: flow select, slug/title inputs, base branch, ticket editor. Validates and detects duplicates. |
+| `/rpi-task <slug>` | Select or reopen the active task by slug. |
 | `/rpi-status` | Show the active task, its stages, and the next action. |
 | `/rpi-artifacts` | Render the artifact graph and statuses. |
 | `/rpi-approve <artifact>` | Approve an artifact (requires in-review first). |
