@@ -8,7 +8,7 @@
   "files": ["extensions", "agents", "skills", "prompts", "src", "README.md"],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test test/unit/*.test.ts"
+    "test": "node --experimental-strip-types --test test/unit/*.test.ts test/engine/*.test.ts"
   },
   "pi": {
     "extensions": ["./extensions/*.ts"],
