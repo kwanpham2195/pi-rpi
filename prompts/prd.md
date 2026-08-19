@@ -1,6 +1,6 @@
 ---
 name: artifact-prd
-description: "Skeleton for the product requirements document (PRD) in a pi-artifacts task."
+description: "Skeleton for the product requirements document (PRD) in a pi-rpi task."
 ---
 
 # PRD: <Feature>

@@ -1,6 +1,6 @@
 ---
 name: artifact-plan
-description: "Skeleton for the implementation plan in a pi-artifacts task."
+description: "Skeleton for the implementation plan in a pi-rpi task."
 ---
 
 # <Feature> Implementation Plan

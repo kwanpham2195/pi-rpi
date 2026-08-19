@@ -1,6 +1,6 @@
 ---
 name: artifact-research
-description: "Skeleton for the research document in a pi-artifacts task."
+description: "Skeleton for the research document in a pi-rpi task."
 ---
 
 # Research: <Topic>

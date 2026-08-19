@@ -1,6 +1,6 @@
 ---
 name: artifact-tdd
-description: "Skeleton for the technical design document (TDD) in a pi-artifacts task."
+description: "Skeleton for the technical design document (TDD) in a pi-rpi task."
 ---
 
 # TDD: <Feature>

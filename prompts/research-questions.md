@@ -1,6 +1,6 @@
 ---
 name: artifact-research-questions
-description: "Skeleton for the research-questions document in a pi-artifacts task."
+description: "Skeleton for the research-questions document in a pi-rpi task."
 ---
 
 # Research Questions

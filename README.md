@@ -1,21 +1,21 @@
-# pi-artifacts
+# pi-rpi
 
 Local-first Research-Plan-Implement workflow for [Pi](https://pi.dev). Task artifacts, a machine-readable manifest, specialist research/implementation agents, and a lightweight TUI — all local, no cloud.
 
-pi-artifacts recreates the Riptide-class workflow (questions → research → design → outline → plan → phased implementation → PR) as an original, local Pi package. Every document, dependency, approval, and run receipt is recorded in `artifact-manifest.json`, so tasks survive restarts, sessions, and worktrees.
+pi-rpi recreates the Riptide-class workflow (questions → research → design → outline → plan → phased implementation → PR) as an original, local Pi package. Every document, dependency, approval, and run receipt is recorded in `artifact-manifest.json`, so tasks survive restarts, sessions, and worktrees.
 
 ## Install
 
 ```bash
-pi install npm:pi-artifacts          # user-wide
-pi install -l npm:pi-artifacts       # project-local (scoped to this repo)
-pi install /path/to/pi-artifacts     # local checkout
+pi install npm:pi-rpi          # user-wide
+pi install -l npm:pi-rpi       # project-local (scoped to this repo)
+pi install /path/to/pi-rpi     # local checkout
 ```
 
 To try the extension surface without installing:
 
 ```bash
-pi -e /path/to/pi-artifacts
+pi -e /path/to/pi-rpi
 ```
 
 Note: `-e` loads the extension (tools, commands, TUI). The specialist agents are only registered by pi-subagents when the package is **installed** (`pi install`), so agent launches (`rpi_start_research`, `rpi_implement_phase`, `rpi_review_implementation`) require a real install.
@@ -48,7 +48,7 @@ freeform: no enforced chain
 | `/rpi-new` | Structured task creation wizard: flow select, slug/title inputs, base branch, ticket editor. Validates and detects duplicates. |
 | `/rpi-task <slug>` | Select or reopen the active task by slug. |
 | `/rpi-status` | Show the active task, its stages, and the next action. |
-| `/rpi-artifacts` | Render the artifact graph and statuses. |
+| `/rpi-rpi` | Render the artifact graph and statuses. |
 | `/rpi-approve <artifact>` | Approve an artifact (requires in-review first). |
 
 ## Tools

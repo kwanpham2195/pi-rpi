@@ -1,6 +1,6 @@
 # Sample task walkthrough
 
-A complete rpi-flow task, from pasted ticket to research. Run this in any empty git repo with the package installed (`pi install -l /path/to/pi-artifacts`).
+A complete rpi-flow task, from pasted ticket to research. Run this in any empty git repo with the package installed (`pi install -l /path/to/pi-rpi`).
 
 ## 1. Initialize
 

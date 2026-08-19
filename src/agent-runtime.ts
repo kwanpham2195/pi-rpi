@@ -86,7 +86,7 @@ export function agentUnavailableError(err: unknown): Error {
     /unknown agent|agent.*not.*regist|no such agent|invalid agent|timed out|did not reach a terminal state/i.test(msg)
   ) {
     return new Error(
-      `The pi-artifacts agents could not run (${msg}). They are only discoverable when the package is installed (pi install <pkg> or pi install -l <pkg> for a project), not when loaded with -e. Install the package and ensure pi-subagents is present, then retry.`,
+      `The pi-rpi agents could not run (${msg}). They are only discoverable when the package is installed (pi install <pkg> or pi install -l <pkg> for a project), not when loaded with -e. Install the package and ensure pi-subagents is present, then retry.`,
     );
   }
   return err instanceof Error ? err : new Error(msg);

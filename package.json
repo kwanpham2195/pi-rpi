@@ -1,5 +1,5 @@
 {
-  "name": "pi-artifacts",
+  "name": "pi-rpi",
   "version": "0.1.0",
   "description": "Local-first Research-Plan-Implement workflow for Pi: task artifacts, manifest protocol, specialist agents, and TUI.",
   "keywords": [
