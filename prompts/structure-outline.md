@@ -27,9 +27,23 @@ description: "Skeleton for the structure-outline document in a pi-artifacts task
 
 ### Changes
 
-#### 1.1 <Component/File Group>
+<Short note on why this shape matters and how it connects to the rest of the phase.>
 
-- <Specific file changes and test-file changes, per researched patterns>
+```
+src/feature/
+├── handler.ts        # new: request handling
+├── handler.test.ts   # new: covers the handler
+└── types.ts          # changed: add Feature type
+```
+
+```diff
+ export interface Config {
+   name: string;
++  featureEnabled: boolean;
+ }
+```
+
+<Use the smallest set of views that explains the phase — a tree for file ownership, a diff block for changes to an existing shape, a plain block for a new shape. Not every phase needs both.>
 
 ### Validation
 

@@ -1,6 +1,6 @@
 ---
 name: describe-pr
-description: "Writes the PR description for the active task, with plan-vs-implementation deviation review and an optional walkthrough. Use after implementation when the user asks to describe or open the PR."
+description: "Writes a terse PR description for the active task, grounded in the actual diff. Use after implementation when the user asks to describe or open the PR."
 ---
 
 # Describe PR
@@ -20,16 +20,15 @@ Generate the pull request description for the active task's branch, grounded in 
    - If the branch has unrelated work, list open PRs and ask the user to select one.
 2. Gather the diff: `gh pr diff <number>` (or `git diff base...HEAD`), read it fully, and read referenced files for context.
 3. Read the task's key artifacts (`ticket`, `research`, `design-discussion`, `prd`, `tdd`, `structure-outline`, `plan`) briefly for context and links.
-4. Deviation analysis: if a `plan` artifact exists, run `rpi_review_implementation` with a `reviewTask` naming the plan artifact and base branch. Include the four-category output in the "Deviations from the plan" section.
-5. Walkthrough: for large diffs (roughly 300+ changed lines and 5+ files), create a `pr-walkthrough` artifact narrating the change; skip it for small diffs.
-6. Write the description: what problem, user-facing changes, how it was implemented, deviations, how to verify (worktree commands), changelog entry. Include the ticket link from the ticket artifact when present.
-7. Save the description as a `pr-description` artifact via `rpi_create_artifact`, then apply it: `gh pr edit <number> --body-file <path>`.
+4. If a `plan` artifact exists, run `rpi_review_implementation` with a `reviewTask` naming the plan artifact and base branch as a quality gate before opening the PR. Report material deviations to the user in chat and fix or flag them; do not paste the four-category review output into the PR body.
+5. Write the description: what problem it solves and the user-facing change, in a short paragraph. Then show the shape of the change, not a narrative of how it was built — prefer a `diff` block for changes to an existing shape, a plain code block for a new shape. Include the ticket link from the ticket artifact when present.
+6. Save the description as a `pr-description` artifact via `rpi_create_artifact`, then apply it: `gh pr edit <number> --body-file <path>`.
 
 ## Rules
 
 - Do not fabricate links or URLs. The manifest holds no permalinks; cite local artifact paths.
-- Prominent deviations, breaking changes, and migration notes must be included.
+- Breaking changes and migration notes must be included in the body; do not add a walkthrough, an exhaustive implementation narrative, a verification checklist, changelog text, or a plan-deviation section.
 
 ## Final response
 
-Report the PR number/URL (when available), the description path, and the deviation summary.
+Report the PR number/URL (when available), the description path, and any material deviations found in step 4 (chat only, not in the PR body).

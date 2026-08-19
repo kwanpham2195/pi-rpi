@@ -22,7 +22,7 @@ Config shape:
     {
       "localPath": ".",
       "description": "Primary repository",
-      "sourceRef": "HEAD",
+      "sourceRef": "origin/main",
       "setupCommand": "",
       "copyGlobs": [".env*", ".pi/settings.json", ".pi/workspace.local.json"]
     }

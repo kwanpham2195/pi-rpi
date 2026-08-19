@@ -23,7 +23,13 @@ Precedence: structure outline > TDD > PRD > design discussion > research > ticke
    - Each phase is independently verifiable.
    - No horizontal phases (e.g. "all migrations", "all UI").
    - No phase depends on a later phase.
-5. Per phase: overview, specific file changes, test-file changes per researched patterns, and a Validation section with Automated Verification (runnable commands) plus Manual Verification (human steps, only when justified).
+5. Per phase, lead with a visual view of the shape, not a prose file list:
+   - Use a file-change tree (`├──`, `└──`, `│` glyphs — no ASCII substitutes) when file ownership is the thing to explain.
+   - Use a `diff` block for changes to an existing data structure, schema, or API contract; use a plain code block to show the complete target shape when it is new or mostly new.
+   - Pick the smallest set of views that explains the phase — not every phase needs both a tree and a diff block.
+   - Add a short paragraph before or after each view explaining why the shape matters and how it connects to the rest of the phase.
+   - Include test-file changes in the same tree/diff view when research found existing test patterns (e.g. `+ foo.test.ts  # covers the new behavior`), rather than as a separate prose list.
+   - Close each phase with a Validation section: Automated Verification (runnable commands) plus Manual Verification (human steps, only when justified).
 6. Add the Implementation Overview checkbox list (`- [ ] Phase N: <Title>`).
 
 ## Final response
