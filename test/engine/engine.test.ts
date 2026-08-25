@@ -86,6 +86,7 @@ test("createTask writes manifest and ticket atomically, idempotent reopen", asyn
   assert.equal(m.flow, "rpi");
   assert.equal(m.artifacts.length, 1);
   assert.equal(m.artifacts[0]?.type, "ticket");
+  assert.equal(m.artifacts[0]?.path, "ticket.md");
   assert.equal(m.artifacts[0]?.status, "approved");
   // idempotent: re-open returns same manifest
   const m2 = await createTask(base, {
@@ -114,7 +115,7 @@ test("createArtifact assigns chronological NN names and validates flow", async (
     content: "# Questions\n",
   dependsOn: [],
   });
-  assert.equal(r1.artifact.path, "01-current-state.md");
+  assert.equal(r1.artifact.path, "01-research-questions-current-state.md");
 
   const r2 = await createArtifact(taskDir, {
     type: "research",
@@ -122,7 +123,7 @@ test("createArtifact assigns chronological NN names and validates flow", async (
     content: "# Research\n",
    dependsOn: ["research-questions"],
   });
-  assert.equal(r2.artifact.path, "02-auth-current.md");
+  assert.equal(r2.artifact.path, "02-research-auth-current.md");
 
   // prd not enabled in rpi flow
   await assert.rejects(
@@ -460,7 +461,7 @@ test("createArtifact refuses to overwrite an unmanaged filesystem collision", as
   const base = await mkTmp();
   await createTask(base, { slug: "collision", title: "Collision", flow: "freeform", baseBranch: "main" });
   const taskDir = join(base, "collision");
-  const unmanagedPath = join(taskDir, "01-research.md");
+  const unmanagedPath = join(taskDir, "01-research-research.md");
   await writeFile(unmanagedPath, "keep this", "utf8");
   await assert.rejects(
     createArtifact(taskDir, { type: "research", description: "research", content: "replace", dependsOn: [] }),

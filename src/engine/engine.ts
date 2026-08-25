@@ -562,7 +562,7 @@ export async function createTask(baseDir: string, input: CreateTaskInput): Promi
     if (existing) return existing;
     const manifest = newManifest({ slug: input.slug, title: input.title, flow: input.flow, baseBranch: input.baseBranch, ticketUrl: input.ticketUrl });
     if (input.ticketBody !== undefined) {
-      const ticketPath = "00-ticket.md";
+      const ticketPath = "ticket.md";
       const content = input.ticketBody;
       try {
         await writeFile(join(taskDir, ticketPath), content, { encoding: "utf8", flag: "wx" });
@@ -829,10 +829,10 @@ export async function createArtifact(
       }
     }
 
-    // Index allocation from on-disk artifact paths (inside the lock).
+    // Index allocation from stored manifest artifact paths (inside the lock).
     const existingPaths = manifest.artifacts.map((a) => a.path);
     const idx = nextIndex(existingPaths);
-    const filename = `${String(idx).padStart(2, "0")}-${desc}.md`;
+    const filename = `${String(idx).padStart(2, "0")}-${input.type}-${desc}.md`;
     const canonicalTaskDir = await realpath(taskDir);
     const fullPath = resolve(canonicalTaskDir, filename);
     ensureWithin(canonicalTaskDir, fullPath);

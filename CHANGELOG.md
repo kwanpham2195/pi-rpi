@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Create new tickets as `ticket.md` and new artifacts as `NN-<type>-<description>.md`.
 - Restored Pi-native upstream skill templates and guidance.
 - Show the active task's flow, next stage, and review count in Pi's footer.
 - Updated `/rpi-init` to create the default shared workspace configuration and ignore local workspace overrides.

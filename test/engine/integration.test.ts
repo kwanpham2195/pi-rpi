@@ -52,9 +52,9 @@ test("rpi-flow lifecycle mirrors the documented UI path", async () => {
   await setArtifactStatus(m, "structure-outline", "in-review", taskDir);
   await setArtifactStatus(m, "structure-outline", "approved", taskDir);
 
-  // on-disk filenames are chronological NN-
+  // On-disk artifact filenames are chronological NN-<type>-<description>.
   const names = m.artifacts.map((a) => a.path).sort();
-  assert.deepEqual(names, ["00-ticket.md", "01-current-state.md", "02-parent-child.md", "03-parent-child.md", "04-parent-child.md"]);
+  assert.deepEqual(names, ["01-research-questions-current-state.md", "02-research-parent-child.md", "03-design-discussion-parent-child.md", "04-structure-outline-parent-child.md", "ticket.md"]);
 
   // precedence for a plugin built on outline excludes research-questions and honors the chain
   const inputs = resolvePrecedence(m, "plan");
@@ -119,7 +119,7 @@ test("ticket file lands on disk with the provided body", async () => {
     baseBranch: "main",
     ticketBody: body,
   });
-  const content = await readFile(join(base, "tick", "00-ticket.md"), "utf8");
+  const content = await readFile(join(base, "tick", "ticket.md"), "utf8");
   assert.equal(content, body);
   await rm(base, { recursive: true, force: true });
 });
