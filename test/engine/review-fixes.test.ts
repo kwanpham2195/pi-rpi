@@ -21,11 +21,11 @@ async function mkTmp(): Promise<string> {
 
 test("duplicate type creation is rejected unless superseding", async () => {
   const base = await mkTmp();
-  await createTask(base, { slug: "dup", title: "D", flow: "rpi", baseBranch: "main" });
+  await createTask(base, { slug: "dup", title: "D", flow: "freeform", baseBranch: "main" });
   const taskDir = join(base, "dup");
-  await createArtifact(taskDir, { type: "research", description: "r", content: "v1" });
+  await createArtifact(taskDir, { type: "research", description: "r", content: "v1", dependsOn: [] });
   await assert.rejects(
-    createArtifact(taskDir, { type: "research", description: "r2", content: "v2" }),
+    createArtifact(taskDir, { type: "research", description: "r2", content: "v2", dependsOn: [] }),
     /already exists.*pass supersedes/,
   );
   await rm(base, { recursive: true, force: true });
@@ -33,12 +33,12 @@ test("duplicate type creation is rejected unless superseding", async () => {
 
 test("supersede requires the replaced artifact to be approved", async () => {
   const base = await mkTmp();
-  await createTask(base, { slug: "sup", title: "S", flow: "rpi", baseBranch: "main" });
+  await createTask(base, { slug: "sup", title: "S", flow: "freeform", baseBranch: "main" });
   const taskDir = join(base, "sup");
-  await createArtifact(taskDir, { type: "research", description: "r", content: "v1" }); // draft
+  await createArtifact(taskDir, { type: "research", description: "r", content: "v1", dependsOn: [] }); // draft
   // draft -> superseded is invalid
   await assert.rejects(
-    createArtifact(taskDir, { type: "research", description: "r2", content: "v2", supersedes: "research" }),
+    createArtifact(taskDir, { type: "research", description: "r2", content: "v2", dependsOn: [], supersedes: "research" }),
     /Invalid status transition draft -> superseded/,
   );
   // approve then supersede works; the new version gets a unique id
@@ -49,6 +49,7 @@ test("supersede requires the replaced artifact to be approved", async () => {
     type: "research",
     description: "r2",
     content: "v2",
+    dependsOn: [],
     supersedes: "research",
   });
   assert.equal(created.artifact.id, "research-v2");
@@ -64,15 +65,15 @@ test("supersede requires the replaced artifact to be approved", async () => {
 
 test("updateArtifact rejects a manifest path that escapes the task dir", async () => {
   const base = await mkTmp();
-  await createTask(base, { slug: "esc", title: "E", flow: "rpi", baseBranch: "main" });
+  await createTask(base, { slug: "esc", title: "E", flow: "freeform", baseBranch: "main" });
   const taskDir = join(base, "esc");
-  const created = await createArtifact(taskDir, { type: "research", description: "r", content: "v1" });
+  const created = await createArtifact(taskDir, { type: "research", description: "r", content: "v1", dependsOn: [] });
   // Tamper the manifest: point the research artifact's path outside the task dir.
   const m = await loadManifest(taskDir);
   const artifact = m.artifacts.find((a) => a.id === created.artifact.id)!;
   artifact.path = "../../../../etc/pwned.md";
   await writeFile(join(taskDir, "artifact-manifest.json"), JSON.stringify(m, null, 2), "utf8");
-  await assert.rejects(updateArtifact(taskDir, "research", "pwned"), /Path escapes/);
+  await assert.rejects(updateArtifact(taskDir, "research", "pwned"), /artifacts\[0\]\.path/);
   await rm(base, { recursive: true, force: true });
 });
 
@@ -90,9 +91,9 @@ test("resolvePrecedence slices upstream of fromType and prefers active versions"
   const base = await mkTmp();
   await createTask(base, { slug: "prec", title: "P", flow: "rpi", baseBranch: "main", ticketBody: "# T" });
   const taskDir = join(base, "prec");
-  await createArtifact(taskDir, { type: "research-questions", description: "qs", content: "q" });
-  await createArtifact(taskDir, { type: "research", description: "r", content: "r" });
-  await createArtifact(taskDir, { type: "design-discussion", description: "d", content: "d" });
+  await createArtifact(taskDir, { type: "research-questions", description: "qs", content: "q", dependsOn: [] });
+  await createArtifact(taskDir, { type: "research", description: "r", content: "r", dependsOn: ["research-questions"] });
+  await createArtifact(taskDir, { type: "design-discussion", description: "d", content: "d", dependsOn: ["research"] });
   await createArtifact(taskDir, { type: "structure-outline", description: "o", content: "o", dependsOn: ["design-discussion"] });
   const m = await loadManifest(taskDir);
 
@@ -110,10 +111,11 @@ test("mockup and diagram are auxiliary-enabled in rpi flow; prd is not", async (
   const base = await mkTmp();
   await createTask(base, { slug: "aux", title: "A", flow: "rpi", baseBranch: "main" });
   const taskDir = join(base, "aux");
-  await createArtifact(taskDir, { type: "research", description: "r", content: "r" });
+  await createArtifact(taskDir, { type: "research-questions", description: "qs", content: "q", dependsOn: [] });
+  await createArtifact(taskDir, { type: "research", description: "r", content: "r", dependsOn: ["research-questions"] });
   // mockup is allowed in rpi (auxiliary supporting artifact)
-  await createArtifact(taskDir, { type: "mockup", description: "picker", content: "<html></html>" });
+  await createArtifact(taskDir, { type: "mockup", description: "picker", content: "<html></html>", dependsOn: [] });
   // prd is not allowed in rpi
-  await assert.rejects(createArtifact(taskDir, { type: "prd", description: "nope", content: "" }), /not enabled/);
+  await assert.rejects(createArtifact(taskDir, { type: "prd", description: "nope", content: "", dependsOn: [] }), /not enabled/);
   await rm(base, { recursive: true, force: true });
 });

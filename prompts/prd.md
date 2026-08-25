@@ -19,7 +19,7 @@ description: "Skeleton for the product requirements document (PRD) in a pi-rpi t
 
 ## Solution Details
 
-<Section-by-section detail. Re-paint sections as decisions land; never keep a Q&A log.>
+<Section-by-section detail. Update affected text as decisions land; never keep a Q&A log.>
 
 ## Out of Scope
 

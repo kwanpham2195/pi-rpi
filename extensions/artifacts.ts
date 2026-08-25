@@ -8,36 +8,129 @@ import { isToolCallEventType, withFileMutationQueue } from "@earendil-works/pi-c
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { resolve, join, relative } from "node:path";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import {
   EngineError,
-  ensureWithin,
   createArtifact,
   createTask,
   findArtifact,
+  readArtifact,
   loadManifest,
   setArtifactStatus,
+  setBaseBranch,
   recordPhaseCommit,
-  recordRunId,
+  recordTaskRun,
   tryLoadManifest,
   updateArtifact,
   validateSlug,
+  FLOW_CHAINS,
+  type TaskManifest,
 } from "../src/engine/index.ts";
 import { isWithinRoot, resolveArtifactPath } from "../src/paths.ts";
 import { implementPhase, reviewImplementation, startResearch } from "../src/agent-runtime.ts";
 
 export const DEFAULT_ROOT = ".pi/artifacts";
+const FOOTER_OPTIONAL_ARTIFACT_TYPES = new Set(["ticket", "plan", "mockup", "diagram", "pr-walkthrough"]);
+const DEFAULT_WORKSPACE_CONFIG = {
+  disabled: false,
+  pathTemplate: "~/.pi/workspaces/{{ TASKSLUG }}/{{ REPOBASENAME }}",
+  branchTemplate: "{{ TASKSLUG }}",
+  repos: [{
+    localPath: ".",
+    primary: true,
+    sourceRef: "origin/main",
+    setupCommand: "",
+    copyGlobs: [".env*", ".pi/settings.json", ".pi/workspace.local.json"],
+  }],
+};
+
+/** Add missing gitignore entries without changing existing entries. */
+async function ensureGitignoreEntries(cwd: string, entries: string[]): Promise<void> {
+  const path = resolve(cwd, ".gitignore");
+  let existing: string;
+  try {
+    existing = await readFile(path, "utf8");
+  } catch (error) {
+    if (!(error instanceof Error) || !((error as NodeJS.ErrnoException).code === "ENOENT")) throw error;
+    existing = "";
+  }
+  const present = new Set(existing.split(/\r?\n/));
+  const missing = entries.filter((entry) => !present.has(entry));
+  if (missing.length === 0) return;
+  await writeFile(path, `${existing}${existing && !existing.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`, "utf8");
+}
+
+/** Create the shared workspace configuration once, preserving local customizations. */
+async function ensureWorkspaceConfig(cwd: string): Promise<void> {
+  const path = resolve(cwd, ".pi", "workspace.json");
+  try {
+    await writeFile(path, `${JSON.stringify(DEFAULT_WORKSPACE_CONFIG, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if (!(error instanceof Error) || !((error as NodeJS.ErrnoException).code === "EEXIST")) throw error;
+  }
+}
+const execFileAsync = promisify(execFile);
+const MAX_TOOL_TEXT = 12_000;
+
+type PlannotatorAnnotationDecision = "approved" | "dismissed" | "annotated";
+
+type PlannotatorAnnotationOutcome = {
+  decision: PlannotatorAnnotationDecision;
+  feedback: string;
+};
+
+/** Parse the JSON decision returned by `plannotator annotate --json`. */
+function parsePlannotatorAnnotationOutcome(output: string): PlannotatorAnnotationOutcome | null {
+  try {
+    const result: unknown = JSON.parse(output);
+    if (result === null || typeof result !== "object" || Array.isArray(result)) return null;
+    const decision = "decision" in result ? result.decision : undefined;
+    const feedback = "feedback" in result ? result.feedback : undefined;
+    if ((decision !== "approved" && decision !== "dismissed" && decision !== "annotated") || typeof feedback !== "string") return null;
+    return { decision, feedback: feedback.trim() };
+  } catch {
+    return null;
+  }
+}
+
+/** Build the RPI follow-up message from human artifact annotations. */
+function plannotatorFeedbackPrompt(taskDirectory: string, feedback: string): string {
+  return `# RPI Artifact Annotations\n\nArtifact directory: ${taskDirectory}\n\n${feedback}\n\nAddress this feedback using RPI tools. Use the matching iterate-* skill when the feedback concerns an existing iteratable artifact. Do not guess artifact file paths; inspect the active task first.`;
+}
+const selectedTasks = new WeakMap<ExtensionAPI, { slug: string; taskDir: string }>();
 
 /** Root of all task artifacts for a project. */
 function artifactRoot(cwd: string): string {
   return resolve(cwd, DEFAULT_ROOT);
 }
 
+/** Return the next required flow stage in the compact task footer. */
+function nextFooterStage(manifest: TaskManifest): string {
+  for (const type of FLOW_CHAINS[manifest.flow]) {
+    if (FOOTER_OPTIONAL_ARTIFACT_TYPES.has(type)) continue;
+    const hasApprovedArtifact = manifest.artifacts.some((artifact) => artifact.type === type && artifact.status === "approved");
+    if (!hasApprovedArtifact) return type === "research-questions" ? "research" : type;
+  }
+  return "complete";
+}
+
+/** Update Pi's built-in footer with the selected task's current workflow state. */
+function setActiveTaskFooter(ctx: ExtensionContext, manifest: TaskManifest): void {
+  const inReview = manifest.artifacts.filter((artifact) => artifact.status === "in-review").length;
+  ctx.ui.setStatus("rpi-active", `${manifest.slug} · ${manifest.flow} · next: ${nextFooterStage(manifest)} · ${inReview} in review`);
+}
+
 function taskDir(root: string, slug: string): string {
+  validateSlug(slug);
   return resolve(root, slug);
 }
 
 async function currentTask(pi: ExtensionAPI, ctx: ExtensionContext): Promise<{ slug: string; taskDir: string } | null> {
+  const selected = selectedTasks.get(pi);
+  if (selected) return selected;
   // Reconstruct the selected task from tool-result details (M1 pattern).
   // Scan in reverse so the LATEST selection wins (getBranch is chronological).
   const entries = ctx.sessionManager.getBranch();
@@ -45,29 +138,72 @@ async function currentTask(pi: ExtensionAPI, ctx: ExtensionContext): Promise<{ s
     const entry = entries[i];
     if (entry?.type !== "message") continue;
     if (entry.message.role !== "toolResult") continue;
+    if (entry.message.toolName !== "rpi_create_task" && entry.message.toolName !== "rpi_get_task_context") continue;
     const details = entry.message.details as { taskSlug?: string } | undefined;
-    if (details?.taskSlug) return { slug: details.taskSlug, taskDir: taskDir(artifactRoot(ctx.cwd), details.taskSlug) };
+    if (details?.taskSlug) {
+      try {
+        validateSlug(details.taskSlug);
+      } catch {
+        continue;
+      }
+      const restored = { slug: details.taskSlug, taskDir: taskDir(artifactRoot(ctx.cwd), details.taskSlug) };
+      selectedTasks.set(pi, restored);
+      return restored;
+    }
+  }
+  return null;
+}
+
+function selectTask(pi: ExtensionAPI, cwd: string, slug: string): void {
+  selectedTasks.set(pi, { slug, taskDir: taskDir(artifactRoot(cwd), slug) });
+}
+
+function boundedToolText(text: string): string {
+  return text.length <= MAX_TOOL_TEXT ? text : `${text.slice(0, MAX_TOOL_TEXT)}\n\n[Output truncated at ${MAX_TOOL_TEXT} characters.]`;
+}
+
+
+function runPayloadText(payload: unknown): string {
+  if (payload !== null && typeof payload === "object" && "text" in payload && typeof payload.text === "string") return payload.text;
+  return JSON.stringify(payload);
+}
+/** Fail-closed shell-token policy for staging commands that could include local artifacts. */
+export function gitAddBlockReason(command: string, cwd: string): string | null {
+  const trimmed = command.trim();
+  if (/\b(?:sh|bash)\s+-c\b[\s\S]*\bgit\s+add\b/.test(trimmed)) return "Refusing ambiguous git add; stage literal explicit safe source paths only.";
+  const mentionsAdd = /\badd\b/.test(trimmed);
+  const mentionsGit = /(?:^|[\s;&|])(?:git|\/usr\/bin\/git|["']git["']|["']\/usr\/bin\/git["'])\b/.test(trimmed) || /(?:\$\{?\w+\}?|["']\$\{?\w+\}?["'])\s+add\b/.test(trimmed);
+  if (!mentionsAdd || !mentionsGit) return null;
+  const match = trimmed.match(/^(?:git|\/usr\/bin\/git|["']git["']|["']\/usr\/bin\/git["'])\s+(?:-C\s+([^\s]+)\s+)?add\s+(?:--\s+)?(.+)$/);
+  if (!match || /[;&|`$]/.test(trimmed)) return "Refusing ambiguous git add; stage literal explicit safe source paths only.";
+  const gitCwd = resolve(cwd, (match[1] ?? ".").replace(/^['"]|['"]$/g, ""));
+  const paths = (match[2] ?? "").match(/(?:[^\s'"]+|'[^']*'|"[^"]*")+/g) ?? [];
+  if (paths.length === 0) return "Refusing ambiguous or broad git add; stage explicit safe source paths only.";
+  for (const raw of paths) {
+    const path = raw.replace(/^['"]|['"]$/g, "");
+    if (path === "." || path === ":/" || path.startsWith(":") || path.startsWith("-") || /[*?\[\]{}]/.test(path)) return "Refusing ambiguous or broad git add; stage explicit safe source paths only.";
+    if (isWithinRoot(resolve(cwd, DEFAULT_ROOT), resolveArtifactPath(gitCwd, path))) return `Refusing to stage the artifact root (${DEFAULT_ROOT}).`;
   }
   return null;
 }
 
 export default function artifactsExtension(pi: ExtensionAPI): void {
   // ---------------------------------------------------------------
-  // Context injection: tell the agent which task is active.
+  // Context injection: current active task.
   // ---------------------------------------------------------------
   pi.on("before_agent_start", async (_event, ctx) => {
     const active = await currentTask(pi, ctx);
+    if (!active) return;
+    const manifest = await tryLoadManifest(active.taskDir);
+    if (manifest) setActiveTaskFooter(ctx, manifest);
     return {
       message: {
         customType: "rpi-active-task",
-        content: active
-          ? `Active task: ${active.slug}. Task artifacts live in .pi/artifacts/${active.slug}. Use the rpi_* tools to create/read/update artifacts.`
-          : "No active task. Use /rpi-task <slug> or rpi_get_task_context to select one.",
+        content: `Active task: ${active.slug}. Task artifacts live in .pi/artifacts/${active.slug}. Use the rpi_* tools to create/read/update artifacts.`,
         display: true,
       },
     };
   });
-
   // ---------------------------------------------------------------
   // Tool: select the active task (persisted via tool details)
   // ---------------------------------------------------------------
@@ -98,11 +234,11 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
         ticketBody: params.ticketBody,
         ticketUrl: params.ticketUrl,
       });
-      ctx.ui.setStatus("rpi-active", `${params.slug} · ${params.flow}`);
-      ctx.ui.setWidget("rpi-active", [`Task ${params.slug} (${params.flow})`, "next: create research-questions"]);
+      selectTask(pi, ctx.cwd, params.slug);
+      setActiveTaskFooter(ctx, manifest);
       return {
-        content: [{ type: "text", text: `Task created/selected: ${params.slug} (${params.flow})` }],
-        details: { taskSlug: params.slug, flow: params.flow },
+        content: [{ type: "text", text: `Task created/selected: ${params.slug} (${manifest.flow})` }],
+        details: { taskSlug: params.slug, flow: manifest.flow },
       };
     },
   });
@@ -129,13 +265,8 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
       } catch (err) {
         throw new Error(`Task "${params.slug}" not found or malformed: ${String(err)}`);
       }
-      // Reflect the active task in the TUI status + widget.
-      const next = manifest.artifacts
-        .filter((a) => a.type !== "ticket" && a.status !== "approved" && a.status !== "superseded")
-        .map((a) => a.type)
-        .join(", ");
-      ctx.ui.setStatus("rpi-active", `${params.slug} · ${manifest.flow}`);
-      ctx.ui.setWidget("rpi-active", [`Task ${params.slug} (${manifest.flow})`, `next: ${next || "none"}`]);
+      setActiveTaskFooter(ctx, manifest);
+      selectTask(pi, ctx.cwd, params.slug);
       const summary = {
         slug: manifest.slug,
         title: manifest.title,
@@ -171,7 +302,7 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
       for (const a of manifest.artifacts) {
         lines.push(`[${a.status}] ${a.path} (${a.type}, depends: ${a.dependsOn.join(",") || "none"})`);
       }
-      return { content: [{ type: "text", text: lines.join("\n") }], details: {} };
+      return { content: [{ type: "text", text: boundedToolText(lines.join("\n")) }], details: {} };
     },
   });
 
@@ -195,10 +326,8 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
       const manifest = await loadManifest(taskDir(root, slug));
       const artifactInfo = findArtifact(manifest, params.artifactId);
       if (!artifactInfo) throw new Error(`Artifact "${params.artifactId}" not found.`);
-      const abs = join(taskDir(root, slug), artifactInfo.path);
-      ensureWithin(taskDir(root, slug), abs);
-      const content = await readFile(abs, "utf8");
-      return { content: [{ type: "text", text: content }], details: { artifactId: params.artifactId } };
+      const content = await readArtifact(taskDir(root, slug), artifactInfo.id);
+      return { content: [{ type: "text", text: boundedToolText(content) }], details: { artifactId: params.artifactId } };
     },
   });
 
@@ -231,7 +360,7 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
       ] as const),
       description: Type.String({ description: "2-4 word kebab slug for the filename, e.g. parent-child-tracking" }),
       content: Type.String({ description: "Full markdown content of the document" }),
-      dependsOn: Type.Optional(Type.Array(Type.String(), { description: "Artifact ids this depends on" })),
+      dependsOn: Type.Array(Type.String(), { description: "Artifact ids this depends on" }),
       status: Type.Optional(StringEnum(["draft", "in-review", "approved"] as const)),
       supersedes: Type.Optional(Type.String({ description: "Id or logical type of the artifact this replaces (must be approved)" })),
     }),
@@ -249,6 +378,7 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
       });
       const artifact = findArtifact(created.manifest, params.type);
       if (!artifact) throw new Error(`Artifact "${params.type}" was not created.`);
+      setActiveTaskFooter(ctx, created.manifest);
       return {
         content: [
           {
@@ -283,12 +413,12 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
       const manifest = await loadManifest(active.taskDir);
       const artifactInfo = findArtifact(manifest, params.artifactId);
       if (!artifactInfo) throw new Error(`Artifact "${params.artifactId}" not found.`);
-      const abs = join(active.taskDir, artifactInfo.path);
-      ensureWithin(active.taskDir, abs);
-      const contentHash = await withFileMutationQueue(abs, async () => {
+      const queuePath = join(active.taskDir, artifactInfo.path);
+      const contentHash = await withFileMutationQueue(queuePath, async () => {
         const result = await updateArtifact(active.taskDir, params.artifactId, params.content);
         return result.artifact.contentHash;
       });
+      setActiveTaskFooter(ctx, await loadManifest(active.taskDir));
       return {
         content: [{ type: "text", text: `Updated ${params.artifactId}.` }],
         details: { artifactId: params.artifactId, contentHash },
@@ -315,6 +445,7 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
       if (!active) throw new Error("No task selected. First call rpi_get_task_context.");
       const manifest = await loadManifest(active.taskDir);
       await setArtifactStatus(manifest, params.artifactId, params.status, active.taskDir);
+      setActiveTaskFooter(ctx, await loadManifest(active.taskDir));
       return {
         content: [{ type: "text", text: `${params.artifactId} -> ${params.status}` }],
         details: { artifactId: params.artifactId, status: params.status },
@@ -340,16 +471,15 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
       ),
       tasks: Type.Array(Type.String(), { description: "One task string per node, same length" }),
     }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const receipt = await startResearch(pi, params.nodes as never, params.tasks, ctx.cwd);
-      // Persist the run id on the research artifact (if one exists) for resumption.
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const active = await currentTask(pi, ctx);
-      if (active && receipt.runId) {
-        await recordRunId(active.taskDir, "research", receipt.runId).catch(() => undefined);
-      }
+      if (!active) throw new Error("No task selected. First call rpi_get_task_context.");
+      const receipt = await startResearch(pi, params.nodes as never, params.tasks, ctx.cwd, { signal, onSpawn: async (runId) => {
+        await recordTaskRun(active.taskDir, runId, "research fanout");
+      } });
       return {
         content: [
-          { type: "text" as const, text: `Research fanout run ${receipt.runId} ${receipt.state} across ${params.nodes.length} nodes.` },
+          { type: "text" as const, text: boundedToolText(`Research fanout run ${receipt.runId} ${receipt.state} across ${params.nodes.length} nodes.\n\n${runPayloadText(receipt.payload)}`) },
         ],
         details: { runId: receipt.runId, state: receipt.state, nodes: params.nodes },
       };
@@ -370,16 +500,15 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
       agent: StringEnum(["artifact-implementer", "artifact-outline-implementer"] as const),
       phaseTask: Type.String({ description: "Task text describing the phase to implement" }),
     }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const receipt = await implementPhase(pi, params.agent, params.phaseTask, ctx.cwd);
-      // Record a phase-commit receipt so resume can skip completed phases.
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const active = await currentTask(pi, ctx);
-      if (active && receipt.state === "complete" && receipt.runId) {
-        await recordPhaseCommit(active.taskDir, params.phaseId, receipt.runId).catch(() => undefined);
-      }
+      if (!active) throw new Error("No task selected. First call rpi_get_task_context.");
+      const receipt = await implementPhase(pi, params.agent, params.phaseTask, ctx.cwd, { signal, onSpawn: async (runId) => {
+        await recordTaskRun(active.taskDir, runId, `implementation phase ${params.phaseId}`);
+      } });
       return {
         content: [
-          { type: "text" as const, text: `Phase ${params.phaseId} implementation run ${receipt.runId} ${receipt.state}.` },
+          { type: "text" as const, text: boundedToolText(`Phase ${params.phaseId} implementation run ${receipt.runId} ${receipt.state}.\n\n${runPayloadText(receipt.payload)}`) },
         ],
         details: { runId: receipt.runId, state: receipt.state, phaseId: params.phaseId },
       };
@@ -398,113 +527,190 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
     parameters: Type.Object({
       reviewTask: Type.String({ description: "Instructions naming the plan artifact and base branch" }),
     }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const receipt = await reviewImplementation(pi, params.reviewTask, ctx.cwd);
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const active = await currentTask(pi, ctx);
-      if (active && receipt.runId) {
-        await recordRunId(active.taskDir, "pr-description", receipt.runId).catch(() => undefined);
-      }
+      if (!active) throw new Error("No task selected. First call rpi_get_task_context.");
+      const receipt = await reviewImplementation(pi, params.reviewTask, ctx.cwd, { signal, onSpawn: async (runId) => {
+        await recordTaskRun(active.taskDir, runId, "implementation review");
+      } });
       return {
         content: [
-          { type: "text" as const, text: `Implementation review run ${receipt.runId} ${receipt.state}.` },
+          { type: "text" as const, text: boundedToolText(`Implementation review run ${receipt.runId} ${receipt.state}.\n\n${runPayloadText(receipt.payload)}`) },
         ],
         details: { runId: receipt.runId, state: receipt.state },
       };
     },
   });
 
-  // ---------------------------------------------------------------
+  pi.registerTool({
+    name: "rpi_record_phase_commit",
+    label: "RPI Record Phase Commit",
+    description: "Record a verified Git commit for a completed implementation phase.",
+    parameters: Type.Object({ phaseId: Type.String(), runId: Type.String(), commitSha: Type.String() }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const active = await currentTask(pi, ctx);
+      if (!active) throw new Error("No task selected. First call rpi_get_task_context.");
+      if (!/^[0-9a-f]{7,64}$/i.test(params.commitSha)) throw new Error("commitSha must be a Git object ID.");
+      let commitSha: string;
+      try { ({ stdout: commitSha } = await execFileAsync("git", ["rev-parse", "--verify", `${params.commitSha}^{commit}`], { cwd: ctx.cwd })); }
+      catch { throw new Error(`Commit ${params.commitSha} does not exist in this repository.`); }
+      const canonicalCommitSha = commitSha.trim();
+      await recordPhaseCommit(active.taskDir, params.phaseId, params.runId, canonicalCommitSha);
+      return { content: [{ type: "text", text: `Recorded commit ${canonicalCommitSha} for phase ${params.phaseId}.` }], details: { ...params, commitSha: canonicalCommitSha } };
+    },
+  });
+
+  pi.registerTool({
+    name: "rpi_git_diff",
+    label: "RPI Git Diff",
+    description: "Read a bounded diff from an existing base ref to HEAD for implementation review.",
+    parameters: Type.Object({ baseRef: Type.String({ description: "Existing Git base ref" }) }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (!/^[A-Za-z0-9._/@-]+$/.test(params.baseRef)) throw new Error("baseRef contains unsupported characters.");
+      try { await execFileAsync("git", ["rev-parse", "--verify", `${params.baseRef}^{commit}`], { cwd: ctx.cwd }); }
+      catch { throw new Error(`Base ref ${params.baseRef} does not exist.`); }
+      const outputDir = await mkdtemp(join(tmpdir(), "rpi-git-diff-"));
+      const outputPath = join(outputDir, "diff.txt");
+      try {
+        await execFileAsync("git", ["diff", "--no-ext-diff", "--unified=3", `--output=${outputPath}`, `${params.baseRef}...HEAD`], { cwd: ctx.cwd });
+        return { content: [{ type: "text", text: boundedToolText(await readFile(outputPath, "utf8")) }], details: { baseRef: params.baseRef } };
+      } finally {
+        await rm(outputDir, { recursive: true, force: true });
+      }
+    },
+  });
+
   // Commands
   // ---------------------------------------------------------------
   pi.registerCommand("rpi-init", {
-    description: "Initialize the artifact root (.pi/artifacts) and add it to .gitignore. Idempotent.",
+    description: "Initialize artifacts and the default shared worktree configuration. Idempotent.",
     handler: async (_args, ctx) => {
       const root = artifactRoot(ctx.cwd);
       await mkdir(resolve(root), { recursive: true });
-      // gitignore entry
-      const gi = resolve(ctx.cwd, ".gitignore");
-      try {
-        const existing = await readFile(gi, "utf8");
-        if (!existing.split("\n").includes(DEFAULT_ROOT)) {
-          await writeFile(gi, `${existing.replace(/\s*$/, "\n")}${DEFAULT_ROOT}\n`, "utf8");
-        }
-      } catch {
-        await writeFile(ctx.cwd + "/.gitignore", `${DEFAULT_ROOT}\n`, "utf8");
-      }
-      await ctx.ui.notify(`Artifact root ready at ${DEFAULT_ROOT}`, "info");
+      await ensureWorkspaceConfig(ctx.cwd);
+      await ensureGitignoreEntries(ctx.cwd, [DEFAULT_ROOT, ".pi/workspace.local.json"]);
+      await ctx.ui.notify(`RPI ready: ${DEFAULT_ROOT} and .pi/workspace.json`, "info");
     },
   });
 
   pi.registerCommand("rpi-new", {
-    description: "Create a new task with a guided form: flow, slug, title, base branch, and ticket body. Structured alternative to describing the task in plain language.",
-    handler: async (_args, ctx) => {
-      const root = artifactRoot(ctx.cwd);
-
-      const flow = await ctx.ui.select("Flow:", ["rpi", "prd", "oneshot", "freeform"]);
-      if (!flow) {
-        await ctx.ui.notify("Cancelled.", "info");
+    description: "Create a new RPI task from a work intent. The active LLM generates its title and slug.",
+    handler: async (args, ctx) => {
+      const intent = args.trim() || (await ctx.ui.editor("What do you want to accomplish?", ""))?.trim();
+      if (!intent) {
+        await ctx.ui.notify("Task intent is required.", "info");
         return;
       }
-
-      const slug = await ctx.ui.input("Task slug (kebab-case):", "eng-1234-example");
-      if (!slug) {
-        await ctx.ui.notify("Cancelled.", "info");
-        return;
-      }
-      try {
-        validateSlug(slug);
-      } catch (err) {
-        await ctx.ui.notify(`Invalid slug: ${err instanceof Error ? err.message : String(err)}`, "warning");
-        return;
-      }
-
-      const dir = taskDir(root, slug);
-      const existing = await tryLoadManifest(dir);
-      if (existing) {
-        ctx.ui.setStatus("rpi-active", `${slug} · ${existing.flow}`);
-        ctx.ui.setWidget("rpi-active", [`Task ${slug} (${existing.flow})`, "reopened existing task"]);
-        await ctx.ui.notify(`Task "${slug}" already exists — reopened.`, "info");
-        return;
-      }
-
-      const title = (await ctx.ui.input("Title:", slug)) || slug;
-      const baseBranch = (await ctx.ui.input("Base branch:", "main")) || "main";
-      const ticketBody = await ctx.ui.editor("Ticket body (optional markdown):", "");
-
-      await createTask(root, {
-        slug,
-        title,
-        flow: flow as "rpi" | "prd" | "oneshot" | "freeform",
-        baseBranch,
-        ticketBody: ticketBody ? ticketBody : undefined,
-      });
-
-      ctx.ui.setStatus("rpi-active", `${slug} · ${flow}`);
-      ctx.ui.setWidget("rpi-active", [`Task ${slug} (${flow})`, "next: create research-questions (rpi/prd) or implementation (oneshot)"]);
-      await ctx.ui.notify(`Task "${slug}" created (${flow}).`, "info");
+      const flow = await ctx.ui.select("Select task flow:", ["rpi", "prd", "oneshot", "freeform"]);
+      if (!flow) return;
+      pi.sendUserMessage(`Create and select exactly one new RPI task for this intent:\n\n${intent}\n\nCall rpi_create_task exactly once. Generate a concise human-readable title and a unique kebab-case slug. Use flow "${flow}", preserve the original intent verbatim in ticketBody, and do not ask follow-up questions.`);
     },
   });
 
   pi.registerCommand("rpi-task", {
-    description: "Select or create the active task.",
+    description: "Select the active task.",
     getArgumentCompletions: async (prefix: string) => {
-      // list existing task slugs from the artifact root
-      return [{ value: prefix || "eng-1234-example", label: prefix || "eng-1234-example" }];
+      try {
+        const entries = await readdir(artifactRoot(process.cwd()), { withFileTypes: true });
+        return entries.filter((entry) => entry.isDirectory() && entry.name.startsWith(prefix)).map((entry) => entry.name).sort().map((slug) => ({ value: slug, label: slug }));
+      } catch {
+        return [];
+      }
     },
     handler: async (args, ctx) => {
-      // Select existing or create a minimal shell
-      const slug = args.trim();
-      if (!slug) throw new Error("Usage: /rpi-task <slug>");
       const root = artifactRoot(ctx.cwd);
-      const dir = taskDir(root, slug);
-      const existing = await tryLoadManifest(dir);
-      if (!existing) {
-        // create a minimal task (default rpi flow). Real creation is via rpi_get_task_context or a create flow.
-        await createTask(root, { slug, title: slug, flow: "rpi", baseBranch: "main" });
+      let slug = args.trim();
+      if (!slug) {
+        const tasks = [] as Array<{ slug: string; title: string; flow: string }>;
+        try {
+          const entries = await readdir(root, { withFileTypes: true });
+          for (const entry of entries) {
+            if (!entry.isDirectory()) continue;
+            const manifest = await tryLoadManifest(taskDir(root, entry.name));
+            if (manifest) tasks.push({ slug: manifest.slug, title: manifest.title, flow: manifest.flow });
+          }
+        } catch { /* A missing artifact root has no selectable tasks. */ }
+        tasks.sort((left, right) => left.slug.localeCompare(right.slug));
+        if (tasks.length === 0) {
+          await ctx.ui.notify("No tasks yet. Use /rpi-new.", "info");
+          return;
+        }
+        const labels = tasks.map((task) => `${task.slug} · ${task.title} · ${task.flow}`);
+        const choice = await ctx.ui.select("Select task:", labels);
+        if (!choice) return;
+        slug = tasks[labels.indexOf(choice)]!.slug;
       }
-      ctx.ui.setStatus("rpi-active", `${slug} · rpi`);
-      ctx.ui.setWidget("rpi-active", [`Task ${slug} (rpi)`, "next: create research-questions"]);
+      const manifest = await tryLoadManifest(taskDir(root, slug));
+      if (!manifest) {
+        await ctx.ui.notify(`Task "${slug}" was not found. Use /rpi-new.`, "info");
+        return;
+      }
+      selectTask(pi, ctx.cwd, slug);
+      setActiveTaskFooter(ctx, manifest);
       await ctx.ui.notify(`Active task: ${slug}`, "info");
+    },
+  });
+
+  pi.registerCommand("rpi-change-base", {
+    description: "Select the active task's Git base branch.",
+    handler: async (_args, ctx) => {
+      const active = await currentTask(pi, ctx);
+      if (!active) {
+        await ctx.ui.notify("No active task. Use /rpi-task.", "info");
+        return;
+      }
+      const result = await pi.exec(
+        "git",
+        ["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes/origin"],
+        { cwd: ctx.cwd },
+      );
+      if (result.code !== 0) {
+        await ctx.ui.notify("Could not list Git branches.", "error");
+        return;
+      }
+      const refs = [...new Set(result.stdout.split("\n").map((ref) => ref.trim()).filter((ref) => ref && ref !== "origin/HEAD"))]
+        .sort((left, right) => left.localeCompare(right));
+      if (refs.length === 0) {
+        await ctx.ui.notify("No Git branches are available.", "info");
+        return;
+      }
+      const baseBranch = await ctx.ui.select("Select base branch:", refs);
+      if (!baseBranch) return;
+      const manifest = await loadManifest(active.taskDir);
+      await setBaseBranch(manifest, baseBranch, active.taskDir);
+      setActiveTaskFooter(ctx, manifest);
+      await ctx.ui.notify(`Base branch: ${baseBranch}`, "info");
+    },
+  });
+
+  pi.registerCommand("rpi-annotate", {
+    description: "Annotate the active task's artifact folder with Plannotator.",
+    handler: async (_args, ctx) => {
+      const active = await currentTask(pi, ctx);
+      if (!active) {
+        await ctx.ui.notify("No active task. Use /rpi-task <slug>.", "info");
+        return;
+      }
+      const result = await pi.exec("plannotator", ["annotate", active.taskDir, "--json"]);
+      if (result.code !== 0) {
+        await ctx.ui.notify(result.stderr.trim() || result.stdout.trim() || "Plannotator annotation failed.", "error");
+        return;
+      }
+      const outcome = parsePlannotatorAnnotationOutcome(result.stdout);
+      if (!outcome) {
+        await ctx.ui.notify("Plannotator returned invalid annotation data.", "error");
+        return;
+      }
+      if (outcome.decision === "annotated" || (outcome.decision === "approved" && outcome.feedback)) {
+        pi.sendUserMessage(plannotatorFeedbackPrompt(active.taskDir, outcome.feedback), { deliverAs: "followUp" });
+        await ctx.ui.notify("Plannotator feedback queued.", "info");
+        return;
+      }
+      if (outcome.decision === "approved") {
+        await ctx.ui.notify("Plannotator annotation approved.", "info");
+        return;
+      }
+      await ctx.ui.notify("Plannotator annotation dismissed.", "info");
     },
   });
 
@@ -549,10 +755,23 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
     description: "Approve an artifact (moves it to approved with a receipt).",
     handler: async (args, ctx) => {
       const active = await currentTask(pi, ctx);
-      if (!active) throw new Error("No active task.");
-      const artifactId = args.trim();
+      if (!active) {
+        await ctx.ui.notify("No active task. Use /rpi-task.", "info");
+        return;
+      }
       const manifest = await loadManifest(active.taskDir);
+      let artifactId = args.trim();
+      if (!artifactId) {
+        const eligible = manifest.artifacts.filter((artifact) => artifact.status === "in-review");
+        if (eligible.length === 0) {
+          await ctx.ui.notify("No artifacts are in review.", "info");
+          return;
+        }
+        artifactId = await ctx.ui.select("Approve artifact:", eligible.map((artifact) => artifact.id)) ?? "";
+        if (!artifactId) return;
+      }
       await setArtifactStatus(manifest, artifactId, "approved", active.taskDir);
+      setActiveTaskFooter(ctx, await loadManifest(active.taskDir));
       await ctx.ui.notify(`${artifactId} -> approved`, "info");
     },
   });
@@ -574,37 +793,11 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
         }
       }
     }
-    // Commit guard: refuse `git add` of paths under the artifact root.
     if (isToolCallEventType("bash", event)) {
-      const cmd = (event.input as { command?: unknown }).command;
-      if (typeof cmd === "string" && /\bgit\s+add\b/.test(cmd)) {
-        const rootBase = resolve(ctx.cwd, DEFAULT_ROOT);
-        // any explicit path argument under the artifact root triggers the guard.
-        // Strip a leading `--` separator and surrounding quotes from each token.
-        const addPaths = cmd.replace(/^.*\bgit\s+add\b/, "").trim().replace(/^--\s*/, "");
-        const hits = addPaths
-          .split(/\s+/)
-          .filter(Boolean)
-          .map((p) => p.replace(/^["']+|["']+$/g, ""))
-          .some((p) => isWithinRoot(rootBase, resolveArtifactPath(ctx.cwd, p)));
-        if (hits) {
-          return {
-            block: true,
-            reason: `Refusing to stage the artifact root (${DEFAULT_ROOT}). Task artifacts belong in the artifact store, not the implementation repo. Use ci-commit to stage explicit paths only.`,
-          };
-        }
-        // `git add -A` / `git add .` / `git add -- .` is only safe when the root is gitignored.
-        if (/\bgit\s+add\s+(-A|\.|--all|--\s*\.)\b/.test(cmd)) {
-          try {
-            const { execSync } = await import("node:child_process");
-            execSync(`git check-ignore ${JSON.stringify(rootBase)}`, { cwd: ctx.cwd, stdio: "ignore" });
-          } catch {
-            return {
-              block: true,
-              reason: `Refusing \`git add -A\` / \`git add .\` while the artifact root (${DEFAULT_ROOT}) is not gitignored. Run /rpi-init to add the ignore entry, or stage explicit paths (see ci-commit).`,
-            };
-          }
-        }
+      const command = (event.input as { command?: unknown }).command;
+      if (typeof command === "string") {
+        const reason = gitAddBlockReason(command, ctx.cwd);
+        if (reason) return { block: true, reason };
       }
     }
   });

@@ -11,12 +11,13 @@ test("package.json declares the pi manifest surface", async () => {
   const pkg = JSON.parse(await readFile(resolve(pkgRoot, "package.json"), "utf8"));
   assert.equal(pkg.keywords?.includes("pi-package"), true);
   assert.ok(Array.isArray(pkg.pi.extensions));
+  assert.equal(pkg.pi.extensions.includes("./node_modules/pi-subagents/index.ts"), false);
   assert.ok(Array.isArray(pkg.pi.skills));
   assert.ok(Array.isArray(pkg.pi.prompts));
+  assert.ok(pkg.files.includes("CHANGELOG.md"));
   assert.deepEqual(pkg.pi.subagents?.agents, ["./agents"]);
-  // pi-subagents is bundled
-  assert.ok(pkg.dependencies["pi-subagents"]);
-  assert.ok(pkg.bundledDependencies?.includes("pi-subagents"));
+  assert.equal(pkg.dependencies?.["pi-subagents"], undefined);
+  assert.equal(pkg.bundledDependencies?.includes("pi-subagents") ?? false, false);
   // core packages are peers
   for (const name of [
     "@earendil-works/pi-ai",
@@ -47,12 +48,14 @@ test("every SKILL.md has valid frontmatter (name + description)", async () => {
     assert.match(text, /^---\n/, `${dir}: missing frontmatter`);
     assert.match(text, /^name: /m, `${dir}: missing name`);
     assert.match(text, /^description: /m, `${dir}: missing description`);
+    assert.match(text, /^description: ["']/m, `${dir}: description must be quoted`);
   }
 });
 
-test("agentUnavailableError rewrites unknown-agent errors to install guidance", () => {
+test("agentUnavailableError explains how package agents become available", () => {
   const err = agentUnavailableError(new Error("Unknown agent: artifact-locator"));
-  assert.match(err.message, /only discoverable when the package is installed/);
+  assert.match(err.message, /pi install npm:pi-subagents/);
+  assert.match(err.message, /pi list/);
   // unrelated errors pass through
   const other = agentUnavailableError(new Error("spawn failed: timeout"));
   assert.doesNotMatch(other.message, /only discoverable/);

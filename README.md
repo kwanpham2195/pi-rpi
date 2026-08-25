@@ -1,101 +1,74 @@
 # pi-rpi
 
-Local-first Research-Plan-Implement workflow for [Pi](https://pi.dev). Task artifacts, a machine-readable manifest, specialist research/implementation agents, and a lightweight TUI — all local, no cloud.
-
-pi-rpi recreates the Riptide-class workflow (questions → research → design → outline → plan → phased implementation → PR) as an original, local Pi package. Every document, dependency, approval, and run receipt is recorded in `artifact-manifest.json`, so tasks survive restarts, sessions, and worktrees.
+Local Research-Plan-Implement workflow for [Pi](https://pi.dev). It stores task documents and receipts in a local manifest.
 
 ## Install
 
-```bash
-pi install npm:pi-rpi          # user-wide
-pi install -l npm:pi-rpi       # project-local (scoped to this repo)
-pi install /path/to/pi-rpi     # local checkout
-```
-
-To try the extension surface without installing:
+`pi-rpi` is not published to npm. Install a checkout:
 
 ```bash
-pi -e /path/to/pi-rpi
+pi install -l /path/to/pi-rpi   # project-local
+pi install /path/to/pi-rpi      # installed package
 ```
 
-Note: `-e` loads the extension (tools, commands, TUI). The specialist agents are only registered by pi-subagents when the package is **installed** (`pi install`), so agent launches (`rpi_start_research`, `rpi_implement_phase`, `rpi_review_implementation`) require a real install.
+`pi -e /path/to/pi-rpi` loads extension tools and commands for development. It does not register package agents. Install the package before calling `rpi_start_research`, `rpi_implement_phase`, or `rpi_review_implementation`.
 
 ## Quick start
 
 ```text
-/rpi-init                          # create .pi/artifacts/ and gitignore it
-# in a prompt:
-"Create task eng-1478-parent-child, flow rpi, ticket body <pasted ticket>"
-# then run the workflow skills, or drive the tools directly
+/rpi-init
+/rpi-new Add parent-child tracking to projects
+/rpi-task
 ```
+
+`/rpi-new [intent]` accepts task intent (and opens an editor when omitted), then opens a flow picker. The active LLM generates the title and slug, then creates and selects the chosen task flow. `/rpi-task [slug]` selects an existing task: without a slug it opens a picker, and with a slug it is a fast path. `rpi_get_task_context` can restore selection from a prior tool result.
 
 Flow presets:
 
 ```text
-rpi:     research-questions → research → design-discussion → structure-outline → (plan, optional) → implement → PR
-prd:     research-questions → research → prd → tdd → structure-outline → (plan, optional) → implement → PR
+rpi:     research-questions → research → design-discussion → structure-outline → (plan, optional) → implementation → pr-description
+prd:     research-questions → research → prd → tdd → structure-outline → (plan, optional) → implementation → pr-description
 oneshot: ticket → implementation → pr-description
 freeform: no enforced chain
-
-`mockup` and `diagram` are auxiliary supporting artifacts available in rpi/prd/oneshot (create-prd/create-tdd produce them); `ticket` is created at task creation, not via the chain.
 ```
+
+`mockup` and `diagram` support rpi, prd, and oneshot flows. `ticket` is task input.
 
 ## Commands
 
-| Command | Purpose |
-|---------|---------|
-| `/rpi-init` | Create `.pi/artifacts/`, append the gitignore entry. Idempotent. |
-| `/rpi-new` | Structured task creation wizard: flow select, slug/title inputs, base branch, ticket editor. Validates and detects duplicates. |
-| `/rpi-task <slug>` | Select or reopen the active task by slug. |
-| `/rpi-status` | Show the active task, its stages, and the next action. |
-| `/rpi-rpi` | Render the artifact graph and statuses. |
-| `/rpi-approve <artifact>` | Approve an artifact (requires in-review first). |
+- `/rpi-init` — create `.pi/artifacts/`, add artifact and local-workspace ignore entries, and create the default shared `.pi/workspace.json` without replacing an existing config.
+- `/rpi-new [intent]` — choose a flow, then create and select a task from intent; the active LLM generates its title and slug.
+- `/rpi-task [slug]` — select an existing task from a picker, or use a slug as a fast path. The Pi footer shows its flow, next stage, and artifact review count.
+- `/rpi-change-base` — select the active task's Git base branch.
+- `/rpi-annotate` — annotate the active task's artifact directory with Plannotator; feedback returns to the active agent.
+- `/rpi-status` — show the selected task and stages.
+- `/rpi-artifacts` — show artifact paths and status.
+- `/rpi-approve [artifact]` — approve an in-review artifact; opens a picker when omitted.
 
 ## Tools
 
-- `rpi_create_task` — create a task with slug, title, flow, ticket.
-- `rpi_get_task_context` — select the active task.
-- `rpi_list_artifacts`, `rpi_read_artifact` — inspect.
-- `rpi_create_artifact` — create a document; validates flow + dependencies, assigns the next `NN-` name, writes the file and the manifest under a per-task lock.
-- `rpi_update_artifact` — update in place with content hashing.
-- `rpi_set_artifact_status` — draft → in-review → approved → superseded, with transition validation and receipts.
-- `rpi_start_research` — 2-6 parallel fresh read-only research children (needs install).
-- `rpi_implement_phase` — one implementer agent for one phase; parent verifies, human gates (needs install).
-- `rpi_review_implementation` — fresh read-only reviewer comparing plan to `base...HEAD` (needs install).
+- `rpi_create_task`, `rpi_get_task_context` — create or select a task.
+- `rpi_list_artifacts`, `rpi_read_artifact` — inspect artifacts. Read and diff output is bounded with a truncation notice.
+- `rpi_create_artifact`, `rpi_update_artifact`, `rpi_set_artifact_status` — mutate documents through the manifest engine.
+- `rpi_start_research`, `rpi_implement_phase`, `rpi_review_implementation` — run installed package agents and record task-level run receipts.
+- `rpi_record_phase_commit` — records a phase only after a supplied Git commit SHA is verified.
+- `rpi_git_diff` — bounded read-only `base...HEAD` diff for implementation review.
 
-## Skills
+## Manifest and commits
 
-22 skills drive the workflow: create/iterate for research-questions, research, design-discussion, prd, tdd, structure-outline, and plan; implement-outline and implement-plan (one implementer per phase, human gate, commit); iterate-implementation; setup-worktree and configure-workspaces; review-artifact-comments; describe-pr; ci-commit.
+Task state lives in `.pi/artifacts/<slug>/artifact-manifest.json`. It includes artifact hashes, dependencies, status transitions, agent-run receipts, and verified phase-commit receipts. A run receipt proves an agent run, not human verification or a Git commit. For an active task, Pi's built-in footer shows `<slug> · <flow> · next: <stage> · <count> in review`.
 
-Key rules the skills enforce:
-
-- **Precedence**: plan > outline > TDD > PRD > design > research > ticket (research-questions excluded). PRD and TDD are prd-flow only; design-discussion is rpi-flow only.
-- **Interview pacing** (prd/tdd): one question per message, options + tradeoffs + recommendation, sign-off gates.
-- **Structure outline**: thin vertical slices, each independently verifiable, no phase depending on a later one.
-- **Implementation**: exactly one implementer per phase, one writer, human gate per phase, commit per phase.
-- **Agent escalation**: children use `contact_supervisor` for decisions they must not make themselves.
-
-## Manifest and the commit/ignore contract
-
-Task state lives in `.pi/artifacts/<slug>/`:
-
-```text
-.pi/artifacts/<slug>/
-├── artifact-manifest.json        # machine-readable source of truth
-├── artifact-manifest.json.bak    # last good manifest (recovery)
-└── NN-<description>.md           # chronological documents
-```
-
-The artifact root is **gitignored by default** (`/rpi-init` adds it). It is never committed to the implementation repo. `ci-commit` stages explicit paths only, and a `tool_call` guard refuses `git add` of artifact-root paths. For teams that want versioned artifacts, symlink the root to a separate artifacts repo.
+`/rpi-init` ignores the artifact root and `.pi/workspace.local.json`. It creates a shared single-repository worktree config that branches from `origin/main`, uses `~/.pi/workspaces/{{ TASKSLUG }}/{{ REPOBASENAME }}`, and copies local environment and Pi config files. It never replaces an existing `.pi/workspace.json` or writes `.pi/workspace.local.json`. The staging guard blocks broad, ambiguous, and artifact-root `git add` commands. Use explicit source paths with `ci-commit`; do not stage task artifacts in the implementation repository.
 
 ## Requirements
 
-- pi 0.80.3+ (extension API used here)
-- pi-subagents 0.50+ (bundled; agent launches need it registered, which a real `pi install` provides)
+- Pi 0.80.3+
+- pi-subagents 0.50+ installed separately with `pi install npm:pi-subagents`; required only for agent-run tools.
+- Plannotator CLI (optional; required only for `/rpi-annotate`).
 
 ## Development
 
 ```bash
-npm run typecheck   # tsc --noEmit
-npm test            # unit + engine + package tests (node --experimental-strip-types)
+npm run typecheck
+npm test
 ```

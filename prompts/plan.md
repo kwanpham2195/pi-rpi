@@ -69,4 +69,4 @@ description: "Skeleton for the implementation plan in a pi-rpi task."
 
 - ...
 
-_Plan is the "function definitions": exact code shapes, runnable automated verification, and manual verification only when justified. Checkboxes track phase progress; the implementer marks them as phases complete._
+_A plan gives the implementation detail for each slice: code changes, automated proof, and manual checks only when needed. Checkboxes show completed phases._

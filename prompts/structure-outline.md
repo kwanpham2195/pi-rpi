@@ -77,4 +77,4 @@ src/feature/
 
 - ...
 
-_Outline is the "c header files" of the task: phase intent and verification, not exact code. Phases are thin vertical slices, each independently verifiable, no horizontal phases, no phase depending on a later phase._
+_An outline states each slice’s purpose and proof, not its exact code. Slices cross layers, can be checked alone, and never depend on a later slice._

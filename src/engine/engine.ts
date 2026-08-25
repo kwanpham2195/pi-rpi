@@ -6,7 +6,7 @@
  * Tools, commands, skills, and the TUI are thin adapters over this module.
  */
 
-import { mkdir, readFile, rename, writeFile, copyFile, access, stat } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile, copyFile, access, stat, realpath, unlink } from "node:fs/promises";
 import { dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -16,6 +16,7 @@ import {
   type Flow,
   type Receipt,
   type TaskManifest,
+  ARTIFACT_TYPES,
   FLOW_CHAINS,
   FLOW_PRECEDENCE,
   isPrecedenceEligible,
@@ -47,6 +48,10 @@ export class EngineError extends Error {
 
 const MANIFEST_FILENAME = "artifact-manifest.json";
 const MANIFEST_BACKUP = "artifact-manifest.json.bak";
+const TASK_LOCK_FILENAME = ".artifact-manifest.lock";
+const TASK_LOCK_TIMEOUT_MS = 5_000;
+const TASK_LOCK_STALE_MS = 30_000;
+const TASK_LOCK_RETRY_MS = 20;
 
 /** Serialize manifest saves so concurrent writers cannot race the atomic rename. */
 let saveQueue: Promise<unknown> = Promise.resolve();
@@ -56,19 +61,111 @@ function enqueueSave<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-/** Per-task critical section: whole read-validate-mutate-persist runs under one lock. */
+/** Serialize each canonical task path in this process before taking the local filesystem lock. */
 const taskLocks = new Map<string, Promise<unknown>>();
 async function withTaskLock<T>(taskDir: string, fn: () => Promise<T>): Promise<T> {
-  const prev = taskLocks.get(taskDir) ?? Promise.resolve();
+  const canonicalTaskDir = await realpath(taskDir);
+  const prev = taskLocks.get(canonicalTaskDir) ?? Promise.resolve();
   let release!: () => void;
-  const gate = new Promise<void>((r) => (release = r));
-  taskLocks.set(taskDir, prev.then(() => gate));
+  const gate = new Promise<void>((resolveGate) => (release = resolveGate));
+  const queued = prev.then(() => gate);
+  taskLocks.set(canonicalTaskDir, queued);
   await prev;
+  try {
+    return await withFilesystemTaskLock(canonicalTaskDir, fn);
+  } finally {
+    release();
+    if (taskLocks.get(canonicalTaskDir) === queued) taskLocks.delete(canonicalTaskDir);
+  }
+}
+
+/** Acquire an exclusive local lock so independent Node processes cannot overwrite each other's manifests. */
+async function withFilesystemTaskLock<T>(taskDir: string, fn: () => Promise<T>): Promise<T> {
+  const lockPath = join(taskDir, TASK_LOCK_FILENAME);
+  const owner = `${process.pid}:${randomUUID()}`;
+  const deadline = Date.now() + TASK_LOCK_TIMEOUT_MS;
+  while (true) {
+    try {
+      await writeFile(lockPath, JSON.stringify({ owner, pid: process.pid, createdAt: Date.now() }), { encoding: "utf8", flag: "wx" });
+      break;
+    } catch (cause: unknown) {
+      if (!isFileExistsError(cause)) throw cause;
+      await recoverStaleTaskLock(lockPath);
+      if (Date.now() >= deadline) throw new EngineError(`Timed out waiting for task lock at ${lockPath}.`);
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, TASK_LOCK_RETRY_MS));
+    }
+  }
   try {
     return await fn();
   } finally {
-    release();
+    await releaseFilesystemTaskLock(lockPath, owner);
   }
+}
+
+async function recoverStaleTaskLock(lockPath: string): Promise<void> {
+  let lockStat;
+  try {
+    lockStat = await stat(lockPath);
+  } catch (cause: unknown) {
+    if (isFileMissingError(cause)) return;
+    throw cause;
+  }
+  let raw: string;
+  try {
+    raw = await readFile(lockPath, "utf8");
+  } catch (cause: unknown) {
+    if (isFileMissingError(cause)) return;
+    throw cause;
+  }
+  let record: { pid?: unknown; createdAt?: unknown } | undefined;
+  try {
+    record = JSON.parse(raw) as { pid?: unknown; createdAt?: unknown };
+  } catch {
+    // A just-created lock can be observed before its JSON write is complete.
+    // Its file age is the only trustworthy stale-recovery signal.
+    if (Date.now() - lockStat.mtimeMs < TASK_LOCK_STALE_MS) return;
+    record = {};
+  }
+  const pid = typeof record.pid === "number" ? record.pid : undefined;
+  if (pid !== undefined && processIsAlive(pid)) return;
+  const quarantinedPath = `${lockPath}.stale-${randomUUID()}`;
+  try {
+    await rename(lockPath, quarantinedPath);
+    await unlink(quarantinedPath);
+  } catch (cause: unknown) {
+    if (!isFileMissingError(cause)) throw cause;
+  }
+}
+
+function processIsAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (cause: unknown) {
+    return !(typeof cause === "object" && cause !== null && "code" in cause && (cause as { code?: unknown }).code === "ESRCH");
+  }
+}
+
+async function releaseFilesystemTaskLock(lockPath: string, owner: string): Promise<void> {
+  try {
+    const record = JSON.parse(await readFile(lockPath, "utf8")) as { owner?: unknown };
+    if (record.owner === owner) await unlink(lockPath);
+  } catch (cause: unknown) {
+    if (!isFileMissingError(cause)) throw cause;
+  }
+}
+
+function isFileExistsError(cause: unknown): boolean {
+  return typeof cause === "object" && cause !== null && "code" in cause && (cause as { code?: unknown }).code === "EEXIST";
+}
+
+function isFileMissingError(cause: unknown): boolean {
+  return typeof cause === "object" && cause !== null && "code" in cause && (cause as { code?: unknown }).code === "ENOENT";
+}
+function synchronizeManifest(target: TaskManifest, source: TaskManifest): TaskManifest {
+  Object.assign(target, source);
+  return source;
 }
 
 // ---------------------------------------------------------------------------
@@ -127,9 +224,11 @@ export function safeRelativePath(p: string, label = "path"): string {
   // Split and detect traversal
   const parts = normalized.split("/").filter((s) => s.length > 0);
   for (const part of parts) {
-    if (part === "..") throw new EngineError(`Invalid ${label}: traversal not allowed: ${p}`);
+    if (part === "." || part === "..") throw new EngineError(`Invalid ${label}: traversal not allowed: ${p}`);
   }
-  return normalized.replace(/^\/+/, "");
+  const safe = normalized.replace(/^\/+/, "");
+  if (!safe || safe.includes("\0")) throw new EngineError(`Invalid ${label}: unsafe relative path: ${p}`);
+  return safe;
 }
 
 export function ensureWithin(root: string, candidate: string): string {
@@ -138,6 +237,30 @@ export function ensureWithin(root: string, candidate: string): string {
     return candidate;
   }
   throw new EngineError(`Path escapes ${root}: ${candidate}`);
+}
+
+/** Resolve an existing managed artifact without following a symlink outside its task. */
+async function resolveManagedArtifactPath(taskDir: string, artifactPath: string): Promise<string> {
+  const canonicalTaskDir = await realpath(taskDir);
+  const safePath = safeRelativePath(artifactPath, "artifact.path");
+  const lexicalCandidate = resolve(canonicalTaskDir, safePath);
+  ensureWithin(canonicalTaskDir, lexicalCandidate);
+  let canonicalCandidate: string;
+  try {
+    canonicalCandidate = await realpath(lexicalCandidate);
+  } catch (cause: unknown) {
+    if (isFileMissingError(cause)) throw cause;
+    throw new EngineError(`Unsafe artifact path "${artifactPath}": cannot resolve managed file. ${String(cause)}`);
+  }
+  if (!isWithinCanonicalRoot(canonicalTaskDir, canonicalCandidate)) {
+    throw new EngineError(`Unsafe artifact path "${artifactPath}": resolves outside task directory.`);
+  }
+  return canonicalCandidate;
+}
+
+function isWithinCanonicalRoot(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === "" || (!rel.startsWith("..") && !rel.startsWith(sep));
 }
 
 // ---------------------------------------------------------------------------
@@ -171,31 +294,48 @@ export async function taskDirFor(baseDir: string, slug: string): Promise<string>
   return resolve(baseDir, slug);
 }
 
-export async function loadManifest(taskDir: string): Promise<TaskManifest> {
+async function loadManifestState(taskDir: string): Promise<{ manifest: TaskManifest; migrationApplied: boolean }> {
   const path = manifestPath(taskDir);
+  const backup = backupPath(taskDir);
+  let raw: string;
+  let recovered = false;
   try {
-    const raw = await readFile(path, "utf8");
-    const parsed = JSON.parse(raw);
-    return migrateManifest(parsed, taskDir);
-  } catch (err) {
-    // Recover from backup if the live file is corrupt and a backup exists
-    const backup = backupPath(taskDir);
-    let raw: string;
+    raw = await readFile(path, "utf8");
+  } catch (cause: unknown) {
+    if (!isFileMissingError(cause)) throw cause;
+    recovered = true;
     try {
       raw = await readFile(backup, "utf8");
-    } catch {
-      throw new EngineError(`Malformed manifest at ${path} and no backup to recover from. ${String(err)}`);
+    } catch (backupCause: unknown) {
+      if (isFileMissingError(backupCause)) throw new EngineError(`Malformed manifest at ${path} and no backup to recover from. ${String(cause)}`);
+      throw backupCause;
     }
-    let parsed: unknown;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (cause: unknown) {
+    try {
+      raw = await readFile(backup, "utf8");
+    } catch (backupCause: unknown) {
+      if (isFileMissingError(backupCause)) throw new EngineError(`Malformed manifest at ${path} and no backup to recover from. ${String(cause)}`);
+      throw backupCause;
+    }
     try {
       parsed = JSON.parse(raw);
     } catch {
-      throw new EngineError(`Malformed manifest at ${path} and the backup is also unreadable. ${String(err)}`);
+      throw new EngineError(`Malformed manifest at ${path} and the backup is also unreadable. ${String(cause)}`);
     }
-    // Rewrite the live file from backup so future opens succeed
-    await writeFile(path, raw, "utf8");
-    return migrateManifest(parsed, taskDir);
+    recovered = true;
   }
+  if (recovered) await writeFile(path, raw, "utf8");
+  const rawManifest = parseRecord(parsed, "manifest");
+  return { manifest: migrateManifest(rawManifest, taskDir), migrationApplied: rawManifest.schemaVersion !== SCHEMA_VERSION };
+}
+
+/** Load and strictly parse a task manifest, recovering from its last good backup when needed. */
+export async function loadManifest(taskDir: string): Promise<TaskManifest> {
+  return (await loadManifestState(taskDir)).manifest;
 }
 
 export async function saveManifest(taskDir: string, manifest: TaskManifest): Promise<void> {
@@ -210,8 +350,8 @@ export async function saveManifest(taskDir: string, manifest: TaskManifest): Pro
     try {
       await access(path);
       await copyFile(path, backupPath(taskDir));
-    } catch {
-      // no previous manifest; nothing to back up
+    } catch (cause: unknown) {
+      if (!isFileMissingError(cause)) throw cause;
     }
     await rename(tmp, path);
   });
@@ -219,6 +359,170 @@ export async function saveManifest(taskDir: string, manifest: TaskManifest): Pro
 
 function backupPath(taskDir: string): string {
   return join(taskDir, MANIFEST_BACKUP);
+}
+/** Parse a persisted schema-v1 manifest before it enters engine logic. */
+function parseTaskManifest(value: unknown, taskDir: string): TaskManifest {
+  const manifest = parseRecord(value, "manifest");
+  assertExactKeys(manifest, ["schemaVersion", "id", "slug", "title", "ticketUrl", "flow", "baseBranch", "artifacts", "receipts"], "manifest");
+  if (manifest.schemaVersion !== SCHEMA_VERSION) throw new EngineError("Invalid manifest.schemaVersion: expected 1.");
+  const slug = parseString(manifest.slug, "manifest.slug");
+  validateSlug(slug);
+  const id = parseString(manifest.id, "manifest.id");
+  if (id !== `task-${slug}`) throw new EngineError(`Invalid manifest.id: expected task-${slug}.`);
+  const title = parseString(manifest.title, "manifest.title");
+  const baseBranch = parseString(manifest.baseBranch, "manifest.baseBranch");
+  const flow = parseFlow(manifest.flow, "manifest.flow");
+  const ticketUrl = manifest.ticketUrl === undefined ? undefined : parseString(manifest.ticketUrl, "manifest.ticketUrl");
+  const artifacts = parseArray(manifest.artifacts, "manifest.artifacts").map((artifact, index) =>
+    parseArtifact(artifact, `manifest.artifacts[${index}]`),
+  );
+  const receipts = parseArray(manifest.receipts, "manifest.receipts").map((receipt, index) =>
+    parseReceipt(receipt, `manifest.receipts[${index}]`),
+  );
+  assertManifestRelationships(artifacts, receipts);
+  return { schemaVersion: SCHEMA_VERSION, id, slug, title, ticketUrl, flow, baseBranch, artifacts, receipts };
+}
+
+function parseArtifact(value: unknown, field: string): Artifact {
+  const artifact = parseRecord(value, field);
+  assertExactKeys(artifact, ["id", "type", "path", "status", "dependsOn", "supersedes", "contentHash", "updatedAt", "runIds"], field);
+  const type = parseArtifactType(artifact.type, `${field}.type`);
+  const id = parseString(artifact.id, `${field}.id`);
+  const versionPattern = new RegExp(`^${type}(?:-v(?:[2-9]|[1-9][0-9]+))?$`);
+  if (!versionPattern.test(id)) throw new EngineError(`Invalid ${field}.id: must identify its artifact type.`);
+  const path = safeRelativePath(parseString(artifact.path, `${field}.path`), `${field}.path`);
+  const status = parseArtifactStatus(artifact.status, `${field}.status`);
+  const dependsOn = parseStringArray(artifact.dependsOn, `${field}.dependsOn`);
+  const supersedes = artifact.supersedes === undefined ? undefined : parseString(artifact.supersedes, `${field}.supersedes`);
+  const contentHash = parseString(artifact.contentHash, `${field}.contentHash`);
+  if (!/^[a-f0-9]{64}$/.test(contentHash)) throw new EngineError(`Invalid ${field}.contentHash: expected a SHA-256 hex digest.`);
+  const updatedAt = parseTimestamp(artifact.updatedAt, `${field}.updatedAt`);
+  const runIds = artifact.runIds === undefined ? undefined : parseStringArray(artifact.runIds, `${field}.runIds`);
+  return { id, type, path, status, dependsOn, supersedes, contentHash, updatedAt, runIds };
+}
+
+function parseReceipt(value: unknown, field: string): Receipt {
+  const receipt = parseRecord(value, field);
+  assertExactKeys(receipt, ["kind", "artifactId", "phaseId", "runId", "commitSha", "detail", "timestamp"], field);
+  const kind = parseReceiptKind(receipt.kind, `${field}.kind`);
+  const artifactId = receipt.artifactId === undefined ? undefined : parseString(receipt.artifactId, `${field}.artifactId`);
+  const phaseId = receipt.phaseId === undefined ? undefined : parseString(receipt.phaseId, `${field}.phaseId`);
+  const runId = receipt.runId === undefined ? undefined : parseString(receipt.runId, `${field}.runId`);
+  const commitSha = receipt.commitSha === undefined ? undefined : parseString(receipt.commitSha, `${field}.commitSha`);
+  const detail = receipt.detail === undefined ? undefined : parseString(receipt.detail, `${field}.detail`);
+  const timestamp = parseTimestamp(receipt.timestamp, `${field}.timestamp`);
+  assertReceiptFields(kind, { artifactId, phaseId, runId, commitSha, detail }, field);
+  return { kind, artifactId, phaseId, runId, commitSha, detail, timestamp };
+}
+
+function assertReceiptFields(kind: Receipt["kind"], fields: Omit<Receipt, "kind" | "timestamp">, field: string): void {
+  const required: Record<Receipt["kind"], Array<keyof typeof fields>> = {
+    "status-change": ["artifactId"], approval: ["artifactId"], drift: ["artifactId", "detail"],
+    "flow-change": ["detail"], "base-branch-change": ["detail"], "phase-commit": ["phaseId", "runId", "commitSha"],
+    "agent-run": ["runId", "detail"], migration: ["detail"],
+  };
+  const allowed: Record<Receipt["kind"], Array<keyof typeof fields>> = {
+    "status-change": ["artifactId", "detail"], approval: ["artifactId"], drift: ["artifactId", "detail"],
+    "flow-change": ["detail"], "base-branch-change": ["detail"], "phase-commit": ["phaseId", "runId", "commitSha"],
+    "agent-run": ["runId", "detail"], migration: ["detail"],
+  };
+  for (const name of required[kind]) if (fields[name] === undefined) throw new EngineError(`Invalid ${field}.${name}: required for ${kind}.`);
+  for (const name of Object.keys(fields) as Array<keyof typeof fields>) {
+    if (fields[name] !== undefined && !allowed[kind].includes(name)) throw new EngineError(`Invalid ${field}.${name}: unrelated to ${kind}.`);
+  }
+  if (kind === "phase-commit" && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(fields.commitSha ?? "")) throw new EngineError(`Invalid ${field}.commitSha: expected a canonical full Git object ID.`);
+}
+
+function assertManifestRelationships(artifacts: Artifact[], receipts: Receipt[]): void {
+  const ids = new Set<string>();
+  const paths = new Set<string>();
+  const activeTypes = new Set<ArtifactType>();
+  for (const artifact of artifacts) {
+    if (ids.has(artifact.id)) throw new EngineError(`Invalid manifest.artifacts: duplicate artifact id "${artifact.id}".`);
+    if (paths.has(artifact.path)) throw new EngineError(`Invalid manifest.artifacts: duplicate artifact path "${artifact.path}".`);
+    if (artifact.status !== "superseded") {
+      if (activeTypes.has(artifact.type)) throw new EngineError(`Invalid manifest.artifacts: duplicate active artifact type "${artifact.type}".`);
+      activeTypes.add(artifact.type);
+    }
+    ids.add(artifact.id);
+    paths.add(artifact.path);
+  }
+  for (const artifact of artifacts) {
+    if (new Set(artifact.dependsOn).size !== artifact.dependsOn.length) throw new EngineError(`Invalid artifact "${artifact.id}".dependsOn: duplicate dependency.`);
+    for (const dependencyId of artifact.dependsOn) {
+      if (dependencyId === artifact.id || !ids.has(dependencyId)) throw new EngineError(`Invalid artifact "${artifact.id}".dependsOn: unknown dependency "${dependencyId}".`);
+    }
+    if (artifact.supersedes !== undefined) {
+      const replaced = artifacts.find((candidate) => candidate.id === artifact.supersedes);
+      if (!replaced) throw new EngineError(`Invalid artifact "${artifact.id}".supersedes: unknown artifact "${artifact.supersedes}".`);
+      if (replaced.type !== artifact.type || replaced.status !== "superseded") throw new EngineError(`Invalid artifact "${artifact.id}".supersedes: must reference a superseded artifact of the same type.`);
+      const visited = new Set<string>([artifact.id]);
+      let cursor: Artifact | undefined = artifact;
+      while (cursor?.supersedes !== undefined) {
+        if (visited.has(cursor.supersedes)) throw new EngineError(`Invalid artifact "${artifact.id}".supersedes: cyclic supersession chain.`);
+        visited.add(cursor.supersedes);
+        cursor = artifacts.find((candidate) => candidate.id === cursor?.supersedes);
+      }
+    }
+  }
+  for (const receipt of receipts) {
+    if (receipt.artifactId !== undefined && !ids.has(receipt.artifactId)) throw new EngineError(`Invalid receipt.artifactId: unknown artifact "${receipt.artifactId}".`);
+  }
+}
+
+function parseRecord(value: unknown, field: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new EngineError(`Invalid ${field}: expected object.`);
+  return value as Record<string, unknown>; // SAFETY: the object check establishes the record boundary used only by this parser.
+}
+
+function assertExactKeys(value: Record<string, unknown>, allowed: string[], field: string): void {
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key)) throw new EngineError(`Invalid ${field}.${key}: unknown field.`);
+  }
+}
+
+function parseArray(value: unknown, field: string): unknown[] {
+  if (!Array.isArray(value)) throw new EngineError(`Invalid ${field}: expected array.`);
+  return value;
+}
+
+function parseString(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.length === 0) throw new EngineError(`Invalid ${field}: expected non-empty string.`);
+  return value;
+}
+
+function parseStringArray(value: unknown, field: string): string[] {
+  return parseArray(value, field).map((entry, index) => parseString(entry, `${field}[${index}]`));
+}
+
+function parseTimestamp(value: unknown, field: string): string {
+  const timestamp = parseString(value, field);
+  if (Number.isNaN(Date.parse(timestamp)) || new Date(timestamp).toISOString() !== timestamp) throw new EngineError(`Invalid ${field}: expected ISO-8601 timestamp.`);
+  return timestamp;
+}
+
+function parseArtifactType(value: unknown, field: string): ArtifactType {
+  const type = parseString(value, field);
+  if (!ARTIFACT_TYPES.includes(type as ArtifactType)) throw new EngineError(`Invalid ${field}: unknown artifact type "${type}".`);
+  return type as ArtifactType; // SAFETY: ARTIFACT_TYPES membership establishes the ArtifactType union.
+}
+
+function parseArtifactStatus(value: unknown, field: string): ArtifactStatus {
+  const status = parseString(value, field);
+  if (status !== "draft" && status !== "in-review" && status !== "approved" && status !== "superseded") throw new EngineError(`Invalid ${field}: unknown artifact status "${status}".`);
+  return status;
+}
+
+function parseFlow(value: unknown, field: string): Flow {
+  const flow = parseString(value, field);
+  if (flow !== "rpi" && flow !== "prd" && flow !== "oneshot" && flow !== "freeform") throw new EngineError(`Invalid ${field}: unknown flow "${flow}".`);
+  return flow;
+}
+
+function parseReceiptKind(value: unknown, field: string): Receipt["kind"] {
+  const kind = parseString(value, field);
+  if (kind !== "status-change" && kind !== "approval" && kind !== "flow-change" && kind !== "base-branch-change" && kind !== "phase-commit" && kind !== "agent-run" && kind !== "migration" && kind !== "drift") throw new EngineError(`Invalid ${field}: unknown receipt kind "${kind}".`);
+  return kind;
 }
 
 // ---------------------------------------------------------------------------
@@ -252,42 +556,34 @@ export function newManifest(input: {
 export async function createTask(baseDir: string, input: CreateTaskInput): Promise<TaskManifest> {
   validateSlug(input.slug);
   const taskDir = resolve(baseDir, input.slug);
-  const existing = await tryLoadManifest(taskDir);
-  if (existing) return existing; // idempotent reopen
-
   await mkdir(taskDir, { recursive: true });
-  const manifest = newManifest({
-    slug: input.slug,
-    title: input.title,
-    flow: input.flow,
-    baseBranch: input.baseBranch,
-    ticketUrl: input.ticketUrl,
+  return withTaskLock(taskDir, async () => {
+    const existing = await tryLoadManifest(taskDir);
+    if (existing) return existing;
+    const manifest = newManifest({ slug: input.slug, title: input.title, flow: input.flow, baseBranch: input.baseBranch, ticketUrl: input.ticketUrl });
+    if (input.ticketBody !== undefined) {
+      const ticketPath = "00-ticket.md";
+      const content = input.ticketBody;
+      try {
+        await writeFile(join(taskDir, ticketPath), content, { encoding: "utf8", flag: "wx" });
+      } catch (cause: unknown) {
+        if (isFileExistsError(cause)) throw new EngineError(`unmanaged artifact file collision at ${join(taskDir, ticketPath)}; refusing to overwrite it.`);
+        throw cause;
+      }
+      manifest.artifacts.push({ id: "ticket", type: "ticket", path: ticketPath, status: "approved", dependsOn: [], contentHash: hashContent(content), updatedAt: new Date().toISOString() });
+    }
+    await saveManifest(taskDir, manifest);
+    return manifest;
   });
-  // Ticket artifact
-  if (input.ticketBody !== undefined) {
-    const ticketPath = "00-ticket.md";
-    const content = input.ticketBody;
-    await writeFile(join(taskDir, ticketPath), content, "utf8");
-    manifest.artifacts.push({
-      id: "ticket",
-      type: "ticket",
-      path: ticketPath,
-      status: "approved", // ticket is fixed input
-      dependsOn: [],
-      contentHash: hashContent(content),
-      updatedAt: new Date().toISOString(),
-    });
-  }
-  await saveManifest(taskDir, manifest);
-  return manifest;
 }
 
 /** Open a task; returns undefined (not error) if it does not exist. */
 export async function tryLoadManifest(taskDir: string): Promise<TaskManifest | null> {
   try {
     await access(manifestPath(taskDir));
-  } catch {
-    return null;
+  } catch (cause: unknown) {
+    if (isFileMissingError(cause)) return null;
+    throw cause;
   }
   return loadManifest(taskDir);
 }
@@ -299,39 +595,38 @@ export async function tryLoadManifest(taskDir: string): Promise<TaskManifest | n
 export async function openTask(baseDir: string, slug: string): Promise<OpenTaskResult> {
   validateSlug(slug);
   const taskDir = await taskDirFor(baseDir, slug);
-  const manifest = await loadManifest(taskDir);
-  const migrationApplied = manifest.receipts.some((r) => r.kind === "migration");
-  // Persist a migrated manifest so legacy files stop re-migrating on every open.
-  if (migrationApplied) {
-    await saveManifest(taskDir, manifest);
-  }
-  // Drift check: contentHash vs file for each artifact.
-  for (const a of manifest.artifacts) {
-    try {
-      const h = await hashFile(join(taskDir, a.path));
-      if (h !== a.contentHash) {
+  return withTaskLock(taskDir, async () => {
+    const { manifest, migrationApplied } = await loadManifestState(taskDir);
+    if (migrationApplied) await saveManifest(taskDir, manifest);
+    // Drift check: contentHash vs file for each artifact.
+    for (const a of manifest.artifacts) {
+      try {
+        const artifactPath = await resolveManagedArtifactPath(taskDir, a.path);
+        const h = await hashFile(artifactPath);
+        if (h !== a.contentHash) {
+          manifest.receipts.push({
+            kind: "drift",
+            artifactId: a.id,
+            detail: "contentHash mismatch on open",
+            timestamp: new Date().toISOString(),
+          });
+          await saveManifest(taskDir, manifest);
+          break;
+        }
+      } catch (cause: unknown) {
+        if (!isFileMissingError(cause)) throw cause;
         manifest.receipts.push({
           kind: "drift",
           artifactId: a.id,
-          detail: "contentHash mismatch on open",
+          detail: "artifact file missing on open",
           timestamp: new Date().toISOString(),
         });
         await saveManifest(taskDir, manifest);
-        break; // one drift receipt per open is enough
+        break;
       }
-    } catch {
-      // missing file — report as drift too
-      manifest.receipts.push({
-        kind: "drift",
-        artifactId: a.id,
-        detail: "artifact file missing on open",
-        timestamp: new Date().toISOString(),
-      });
-      await saveManifest(taskDir, manifest);
-      break;
     }
-  }
-  return { manifest, taskDir, migrationApplied };
+    return { manifest, taskDir, migrationApplied };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -343,23 +638,18 @@ export async function openTask(baseDir: string, slug: string): Promise<OpenTaskR
  * Defaults flow to `rpi` and records a migration receipt.
  */
 export function migrateManifest(parsed: unknown, taskDir: string): TaskManifest {
-  const raw = parsed as Partial<TaskManifest>;
-  if (!raw || typeof raw !== "object") {
-    throw new EngineError(`Malformed manifest at ${manifestPath(taskDir)}: not an object`);
-  }
-  if (raw.schemaVersion === SCHEMA_VERSION && raw.flow && raw.receipts && Array.isArray(raw.artifacts)) {
-    return raw as TaskManifest;
-  }
-  // Legacy / incomplete v1: seed with rpi flow and empty receipts
+  const raw = parseRecord(parsed, "manifest");
+  if (raw.schemaVersion === SCHEMA_VERSION) return parseTaskManifest(raw, taskDir);
+  if (raw.schemaVersion !== undefined) throw new EngineError("Invalid manifest.schemaVersion: expected 1.");
   const manifest = newManifest({
-    slug: raw.slug ?? "unknown",
-    title: raw.title ?? raw.slug ?? "untitled task",
-    flow: raw.flow ?? "rpi",
-    baseBranch: raw.baseBranch ?? "main",
-    ticketUrl: raw.ticketUrl,
+    slug: typeof raw.slug === "string" ? raw.slug : "unknown",
+    title: typeof raw.title === "string" ? raw.title : typeof raw.slug === "string" ? raw.slug : "untitled task",
+    flow: raw.flow === undefined ? "rpi" : parseFlow(raw.flow, "manifest.flow"),
+    baseBranch: typeof raw.baseBranch === "string" ? raw.baseBranch : "main",
+    ticketUrl: raw.ticketUrl === undefined ? undefined : parseString(raw.ticketUrl, "manifest.ticketUrl"),
   });
   if (Array.isArray(raw.artifacts)) {
-    manifest.artifacts = raw.artifacts as Artifact[];
+    manifest.artifacts = raw.artifacts.map((artifact, index) => parseArtifact(artifact, `manifest.artifacts[${index}]`));
   }
   manifest.receipts = [
     {
@@ -368,9 +658,8 @@ export function migrateManifest(parsed: unknown, taskDir: string): TaskManifest 
       timestamp: new Date().toISOString(),
     },
   ];
-  return manifest;
+  return parseTaskManifest(manifest, taskDir);
 }
-
 /** Alias matching the plan's Engine API list. */
 export async function runMigration(parsed: unknown, taskDir: string): Promise<TaskManifest> {
   return migrateManifest(parsed, taskDir);
@@ -401,6 +690,39 @@ export function validateFlow(manifest: TaskManifest, type: ArtifactType): { ok: 
     : { ok: false, error: `Artifact type "${type}" is not enabled in flow "${manifest.flow}". Change the task flow to enable it.` };
 }
 
+/** Return the exact required dependency for a flow-spine artifact. */
+function requiredDependencyIds(manifest: TaskManifest, type: ArtifactType): string[] | undefined {
+  if (manifest.flow === "freeform" || ["ticket", "mockup", "diagram", "pr-walkthrough"].includes(type)) return undefined;
+  if (type === "research-questions") return [];
+  if (manifest.flow === "rpi") {
+    if (type === "research") return [requiredActiveId(manifest, "research-questions", type)];
+    if (type === "design-discussion") return [requiredActiveId(manifest, "research", type)];
+    if (type === "structure-outline") return [requiredActiveId(manifest, "design-discussion", type)];
+    if (type === "plan") return [requiredActiveId(manifest, "structure-outline", type)];
+  }
+  if (manifest.flow === "prd") {
+    if (type === "research") return [requiredActiveId(manifest, "research-questions", type)];
+    if (type === "prd") return [requiredActiveId(manifest, "research", type)];
+    if (type === "tdd") return [requiredActiveId(manifest, "prd", type)];
+    if (type === "structure-outline") return [requiredActiveId(manifest, "tdd", type)];
+    if (type === "plan") return [requiredActiveId(manifest, "structure-outline", type)];
+  }
+  if (type === "implementation") {
+    const plan = findArtifact(manifest, "plan");
+    if (plan) return [plan.id];
+    if (manifest.flow === "oneshot") return [requiredActiveId(manifest, "ticket", type)];
+    return [requiredActiveId(manifest, "structure-outline", type)];
+  }
+  if (type === "pr-description") return [requiredActiveId(manifest, "implementation", type)];
+  return undefined;
+}
+
+function requiredActiveId(manifest: TaskManifest, predecessor: ArtifactType, type: ArtifactType): string {
+  const artifact = findArtifact(manifest, predecessor);
+  if (!artifact) throw new EngineError(`Artifact type "${type}" requires active predecessor "${predecessor}".`);
+  return artifact.id;
+}
+
 // ---------------------------------------------------------------------------
 // Artifact operations
 // ---------------------------------------------------------------------------
@@ -408,7 +730,7 @@ export function validateFlow(manifest: TaskManifest, type: ArtifactType): { ok: 
 export interface CreateArtifactInput {
   type: ArtifactType;
   description: string; // flat kebab-case slug for the filename, e.g. "parent-child-tracking"
-  dependsOn?: string[];
+  dependsOn: string[];
   content: string;
   supersedes?: string; // id (or logical type) of the artifact this replaces; must be approved
   status?: ArtifactStatus;
@@ -455,21 +777,41 @@ export async function createArtifact(
       );
     }
 
-    // Supersede target: must exist and be approved (draft → superseded is invalid).
+    // A replacement must supersede exactly one active, approved artifact of its own type.
     let supersedeId: string | undefined;
     if (input.supersedes) {
-      const replaced = manifest.artifacts.find(
-        (a) => a.id === input.supersedes || (a.type === input.supersedes && a.status !== "superseded"),
+      const activeTargets = manifest.artifacts.filter(
+        (artifact) => artifact.type === input.type && artifact.status !== "superseded",
       );
-      if (!replaced) {
-        throw new EngineError(`supersedes target "${input.supersedes}" not found.`);
+      if (activeTargets.length !== 1) {
+        throw new EngineError(`supersedes requires exactly one active "${input.type}" artifact.`);
+      }
+      const requested = input.supersedes === input.type
+        ? activeTargets[0]
+        : manifest.artifacts.find((artifact) => artifact.id === input.supersedes);
+      if (!requested) throw new EngineError(`supersedes target "${input.supersedes}" not found or is already superseded.`);
+      if (requested.type !== input.type) {
+        throw new EngineError(`supersedes target "${requested.id}" has type "${requested.type}", expected "${input.type}".`);
+      }
+      const replaced = activeTargets[0];
+      if (!replaced) throw new EngineError(`supersedes requires exactly one active "${input.type}" artifact.`);
+      if (requested.id !== replaced.id) {
+        throw new EngineError(`supersedes target "${requested.id}" is not the active "${input.type}" artifact.`);
       }
       assertStatusTransition(replaced.status, "superseded", replaced.id);
       supersedeId = replaced.id;
     }
 
+    if (!Array.isArray(input.dependsOn)) {
+      throw new EngineError("dependsOn must be provided as an array.");
+    }
+    const requiredDependencies = requiredDependencyIds(manifest, input.type);
+    const dependencyIds = input.dependsOn;
+    if (requiredDependencies !== undefined && (dependencyIds.length !== requiredDependencies.length || dependencyIds.some((id, index) => id !== requiredDependencies[index]))) {
+      throw new EngineError(`Artifact type "${input.type}" requires dependsOn: [${requiredDependencies.join(", ")}].`);
+    }
     // Dependency validation: existence + upstream-in-chain + no self-dependency.
-    for (const dep of input.dependsOn ?? []) {
+    for (const dep of dependencyIds) {
       const depArt = manifest.artifacts.find((a) => a.id === dep);
       if (!depArt) {
         throw new EngineError(`Dependency "${dep}" does not exist in this task.`);
@@ -491,9 +833,9 @@ export async function createArtifact(
     const existingPaths = manifest.artifacts.map((a) => a.path);
     const idx = nextIndex(existingPaths);
     const filename = `${String(idx).padStart(2, "0")}-${desc}.md`;
-    const fullPath = join(taskDir, filename);
-    ensureWithin(taskDir, fullPath);
-
+    const canonicalTaskDir = await realpath(taskDir);
+    const fullPath = resolve(canonicalTaskDir, filename);
+    ensureWithin(canonicalTaskDir, fullPath);
     const now = new Date().toISOString();
     const contentHash = hashContent(input.content);
     const versionCount = manifest.artifacts.filter((a) => a.type === input.type).length;
@@ -503,14 +845,21 @@ export async function createArtifact(
       type: input.type,
       path: filename,
       status: input.status ?? "draft",
-      dependsOn: input.dependsOn ?? [],
+      dependsOn: dependencyIds,
       supersedes: supersedeId,
       contentHash,
       updatedAt: now,
     };
 
-    // Persist file
-    await writeFile(fullPath, input.content, "utf8");
+    // Exclusive creation closes the check-then-write collision window.
+    try {
+      await writeFile(fullPath, input.content, { encoding: "utf8", flag: "wx" });
+    } catch (cause: unknown) {
+      if (isFileExistsError(cause)) {
+        throw new EngineError(`unmanaged artifact file collision at ${fullPath}; refusing to overwrite it.`);
+      }
+      throw cause;
+    }
     manifest.artifacts.push(artifact);
 
     // Supersede the replaced artifact (transition already validated)
@@ -532,6 +881,15 @@ export async function createArtifact(
   });
 }
 
+/** Read a managed artifact only after canonical containment has been verified. */
+export async function readArtifact(taskDir: string, artifactId: string): Promise<string> {
+  const manifest = await loadManifest(taskDir);
+  const artifact = findArtifact(manifest, artifactId);
+  if (!artifact) throw new EngineError(`Artifact "${artifactId}" not found.`);
+  const abs = await resolveManagedArtifactPath(taskDir, artifact.path);
+  return readFile(abs, "utf8");
+}
+
 /** Update an artifact's file and contentHash in place. Returns updated manifest + artifact. */
 export async function updateArtifact(
   taskDir: string,
@@ -543,11 +901,21 @@ export async function updateArtifact(
     const artifact = findArtifact(manifest, artifactId);
     if (!artifact) throw new EngineError(`Artifact "${artifactId}" not found.`);
 
-    const abs = join(taskDir, artifact.path);
-    ensureWithin(taskDir, abs);
+    const abs = await resolveManagedArtifactPath(taskDir, artifact.path);
     artifact.contentHash = hashContent(content);
     artifact.updatedAt = new Date().toISOString();
-    await writeFile(abs, content, "utf8");
+    const temporaryPath = `${abs}.tmp-${process.pid}-${randomUUID()}`;
+    try {
+      await writeFile(temporaryPath, content, { encoding: "utf8", flag: "wx" });
+      await rename(temporaryPath, abs);
+    } catch (cause: unknown) {
+      try {
+        await unlink(temporaryPath);
+      } catch (cleanupCause: unknown) {
+        if (!isFileMissingError(cleanupCause)) throw cleanupCause;
+      }
+      throw cause;
+    }
     await saveManifest(taskDir, manifest);
     return { manifest, artifact };
   });
@@ -560,20 +928,27 @@ export async function setArtifactStatus(
   status: ArtifactStatus,
   taskDir?: string,
 ): Promise<TaskManifest> {
-  const artifact = findArtifact(manifest, artifactId);
-  if (!artifact) throw new EngineError(`Artifact "${artifactId}" not found.`);
-
-  const from = artifact.status;
-  if (from === status) return manifest; // no-op: no receipt
-  assertStatusTransition(from, status, artifactId);
-  artifact.status = status;
-  manifest.receipts.push({
-    kind: status === "approved" ? "approval" : "status-change",
-    artifactId,
-    timestamp: new Date().toISOString(),
+  const mutate = async (freshManifest: TaskManifest): Promise<TaskManifest> => {
+    const artifact = findArtifact(freshManifest, artifactId);
+    if (!artifact) throw new EngineError(`Artifact "${artifactId}" not found.`);
+    const from = artifact.status;
+    if (from === status) return freshManifest;
+    assertStatusTransition(from, status, artifact.id);
+    artifact.status = status;
+    freshManifest.receipts.push({
+      kind: status === "approved" ? "approval" : "status-change",
+      artifactId: artifact.id,
+      timestamp: new Date().toISOString(),
+    });
+    return freshManifest;
+  };
+  if (!taskDir) return mutate(manifest);
+  return withTaskLock(taskDir, async () => {
+    const freshManifest = await loadManifest(taskDir);
+    const updated = await mutate(freshManifest);
+    await saveManifest(taskDir, updated);
+    return synchronizeManifest(manifest, updated);
   });
-  if (taskDir) await saveManifest(taskDir, manifest);
-  return manifest;
 }
 
 /** Alias matching the plan's Engine API list. */
@@ -625,24 +1000,63 @@ export function resolvePrecedence(manifest: TaskManifest, fromType: ArtifactType
 // ---------------------------------------------------------------------------
 
 export async function changeFlow(manifest: TaskManifest, flow: Flow, taskDir?: string): Promise<TaskManifest> {
-  // Block flows that would orphan already-created artifacts of now-disabled types
-  const nowDisabled = manifest.artifacts.filter((a) => !isTypeEnabled(flow, a.type));
-  if (nowDisabled.length > 0) {
-    throw new EngineError(
-      `Cannot change flow to "${flow}": existing artifacts are not enabled in that flow: ${nowDisabled
-        .map((a) => a.id)
-        .join(", ")}. Supersede or delete them first.`,
+  const mutate = async (freshManifest: TaskManifest): Promise<TaskManifest> => {
+    // Ticket is task input; mockup and diagram are supporting material, not flow-spine blockers.
+    const nowDisabled = freshManifest.artifacts.filter(
+      (artifact) => !["ticket", "mockup", "diagram"].includes(artifact.type) && !isTypeEnabled(flow, artifact.type),
     );
-  }
-  const old = manifest.flow;
-  manifest.flow = flow;
-  manifest.receipts.push({
-    kind: "flow-change",
-    detail: `${old} -> ${flow}`,
-    timestamp: new Date().toISOString(),
+    if (nowDisabled.length > 0) {
+      throw new EngineError(
+        `Cannot change flow to "${flow}": existing artifacts are not enabled in that flow: ${nowDisabled
+          .map((artifact) => artifact.id)
+          .join(", ")}. Supersede or delete them first.`,
+      );
+    }
+    const old = freshManifest.flow;
+    if (old === flow) return freshManifest;
+    freshManifest.flow = flow;
+    freshManifest.receipts.push({
+      kind: "flow-change",
+      detail: `${old} -> ${flow}`,
+      timestamp: new Date().toISOString(),
+    });
+    return freshManifest;
+  };
+  if (!taskDir) return mutate(manifest);
+  return withTaskLock(taskDir, async () => {
+    const freshManifest = await loadManifest(taskDir);
+    const updated = await mutate(freshManifest);
+    await saveManifest(taskDir, updated);
+    return synchronizeManifest(manifest, updated);
   });
-  if (taskDir) await saveManifest(taskDir, manifest);
-  return manifest;
+}
+
+/** Change a task's Git base branch and record the selected ref. */
+export async function setBaseBranch(
+  manifest: TaskManifest,
+  baseBranch: string,
+  taskDir?: string,
+): Promise<TaskManifest> {
+  const nextBaseBranch = baseBranch.trim();
+  if (!nextBaseBranch) throw new EngineError("Base branch must not be empty.");
+  const mutate = async (freshManifest: TaskManifest): Promise<TaskManifest> => {
+    if (freshManifest.baseBranch === nextBaseBranch) return freshManifest;
+    const previousBaseBranch = freshManifest.baseBranch;
+    freshManifest.baseBranch = nextBaseBranch;
+    freshManifest.receipts.push({
+      kind: "base-branch-change",
+      detail: `${previousBaseBranch} -> ${nextBaseBranch}`,
+      timestamp: new Date().toISOString(),
+    });
+    return freshManifest;
+  };
+  if (!taskDir) return mutate(manifest);
+  return withTaskLock(taskDir, async () => {
+    const freshManifest = await loadManifest(taskDir);
+    const updated = await mutate(freshManifest);
+    await saveManifest(taskDir, updated);
+    return synchronizeManifest(manifest, updated);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -658,19 +1072,29 @@ export async function recordRunId(
   return withTaskLock(taskDir, async () => {
     const manifest = await loadManifest(taskDir);
     const artifact = findArtifact(manifest, artifactId);
-    if (artifact) {
-      artifact.runIds = [...(artifact.runIds ?? []), runId];
-    }
+    if (!artifact) throw new EngineError(`Artifact "${artifactId}" not found.`);
+    artifact.runIds = [...(artifact.runIds ?? []), runId];
     await saveManifest(taskDir, manifest);
     return manifest;
   });
 }
 
-/** Record a phase-commit receipt (phase id + run id). */
+/** Record an agent run at task scope when no destination artifact exists yet. */
+export async function recordTaskRun(taskDir: string, runId: string, detail: string): Promise<TaskManifest> {
+  return withTaskLock(taskDir, async () => {
+    const manifest = await loadManifest(taskDir);
+    manifest.receipts.push({ kind: "agent-run", runId, detail, timestamp: new Date().toISOString() });
+    await saveManifest(taskDir, manifest);
+    return manifest;
+  });
+}
+
+/** Record a phase-commit receipt after its commit SHA has been verified by the extension. */
 export async function recordPhaseCommit(
   taskDir: string,
   phaseId: string,
   runId: string,
+  commitSha: string,
 ): Promise<TaskManifest> {
   return withTaskLock(taskDir, async () => {
     const manifest = await loadManifest(taskDir);
@@ -678,6 +1102,7 @@ export async function recordPhaseCommit(
       kind: "phase-commit",
       phaseId,
       runId,
+      commitSha,
       timestamp: new Date().toISOString(),
     });
     await saveManifest(taskDir, manifest);
@@ -690,7 +1115,8 @@ export async function fileExists(p: string): Promise<boolean> {
   try {
     await stat(p);
     return true;
-  } catch {
-    return false;
+  } catch (cause: unknown) {
+    if (isFileMissingError(cause)) return false;
+    throw cause;
   }
 }

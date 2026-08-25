@@ -20,6 +20,7 @@ export {
   migrateManifest,
   runMigration,
   findArtifact,
+  readArtifact,
   validateFlow,
   createArtifact,
   updateArtifact,
@@ -28,7 +29,9 @@ export {
   assertStatusTransition,
   resolvePrecedence,
   changeFlow,
+  setBaseBranch,
   recordRunId,
+  recordTaskRun,
   recordPhaseCommit,
   fileExists,
 } from "./engine.ts";

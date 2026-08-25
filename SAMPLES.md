@@ -1,80 +1,46 @@
 # Sample task walkthrough
 
-A complete rpi-flow task, from pasted ticket to research. Run this in any empty git repo with the package installed (`pi install -l /path/to/pi-rpi`).
+Run this in an empty Git repository after a local install:
 
-## 1. Initialize
+```bash
+pi install -l /path/to/pi-rpi
+```
+
+## Create and select a task
 
 ```text
 /rpi-init
+/rpi-new
+/rpi-task eng-1478-parent-child
 ```
 
-Expected: `.pi/artifacts/` exists and `.gitignore` contains `.pi/artifacts`.
+The selected task is available to commands and tools in this extension session. `rpi_get_task_context` restores a selection from a previous tool result.
 
-## 2. Create the task
+## Create the document chain
 
-Prompt:
+1. Run `create-research-questions`; it creates `research-questions` with `dependsOn: []`.
+2. Run `create-research`; it creates `research` with `dependsOn: ["research-questions"]`.
+3. Continue with the flow. In rpi, design depends on research and outline depends on design. In prd, PRD depends on research, TDD depends on PRD, and outline depends on TDD. A plan is optional and depends on the outline.
 
-```text
-Create task slug eng-1478-parent-child, title "Parent-child tracking",
-flow rpi, ticket body:
-# ENG-1478
-Track parent-child relationships for sessions.
-```
+Each artifact appears under `.pi/artifacts/<slug>/` with a chronological filename and a manifest entry.
 
-Expected:
+## Implement a phase
 
-```text
-.pi/artifacts/eng-1478-parent-child/
-├── artifact-manifest.json
-└── 00-ticket.md
-```
+Use `implement-outline` or `implement-plan` one phase at a time. After automated checks and human manual verification:
 
-The TUI footer now shows `eng-1478-parent-child · rpi`.
+1. Commit explicit source paths with `ci-commit`.
+2. Create or update the implementation artifact through `rpi_create_artifact` or `rpi_update_artifact`.
+3. Call `rpi_record_phase_commit` with the phase ID, agent run ID, and verified commit SHA.
 
-## 3. Research questions
-
-Invoke the `create-research-questions` skill.
-
-Expected: `01-<slug>.md` (draft) with 2-8 neutral current-state questions.
-
-## 4. Research
-
-Invoke the `create-research` skill. It runs a 2-6 node fanout (`artifact-locator`, `artifact-analyzer`, ...), waits for all children, and synthesizes.
-
-Expected: `02-<slug>.md` (draft, depends on research-questions) with file:line citations, story-style headers, testing patterns.
-
-## 5. Approve
-
-```text
-/rpi-approve research
-```
-
-Wait — direct approve is blocked (`draft → approved` is invalid). Two-step:
-
-```text
-# prompt: set research to in-review, then to approved (rpi_set_artifact_status)
-```
-
-Expected: research `approved`, manifest receipts `status-change` + `approval`.
-
-## 6. What to do next
-
-Continue the rpi flow: `create-design-discussion` → `create-structure-outline` → (optional `create-plan`) → `implement-outline` or `implement-plan` (one phase at a time, human gate per phase, `ci-commit` per phase) → `describe-pr`.
-
-## Oneshot variant
-
-```text
-Create task slug hotfix-1234, flow oneshot, ticket body <pasted fix>
-```
-
-Only `implementation` and `pr-description` artifacts are enabled. Try to create `research` and the tool rejects it: "not enabled in flow oneshot".
+An agent-run receipt alone does not mark a phase committed or human-approved.
 
 ## Resume
 
-Reopen the task in a fresh session (`/rpi-task eng-1478-parent-child`). The manifest restores the active task; plan/outline checkboxes mark implemented phases; receipts carry run IDs for resumable agent work.
+Use `/rpi-task eng-1478-parent-child` to select the task again. The manifest retains artifact state and receipts. Check plan or outline progress and verify the associated commit receipt before treating a phase as complete.
 
 ## Troubleshooting
 
-- `rpi_start_research` says the agents are not registered: the package must be **installed** (`pi install`), not just loaded with `-e`. Agents are only discovered from installed package manifests.
-- `Unmanaged write into artifact root` warning: use `rpi_create_artifact` / `rpi_update_artifact` for artifact files.
-- `Invalid status transition draft -> approved`: go through `in-review` first.
+- Agent tools require `pi install` or `pi install -l`; `pi -e` loads only the extension surface.
+- Artifact reads and `rpi_git_diff` return bounded output with a truncation marker.
+- The stage guard rejects broad or ambiguous `git add` commands. Stage explicit source files instead.
+- `draft → approved` is invalid; set the artifact to `in-review` first.

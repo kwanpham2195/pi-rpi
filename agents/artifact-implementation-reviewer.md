@@ -1,7 +1,7 @@
 ---
 name: artifact-implementation-reviewer
 description: "Compares the authoritative plan against base...HEAD and reports deviations, additions, and unimplemented items for PR descriptions. Read-only; makes no changes and no approvals."
-tools: read, bash, grep, ffgrep, fffind, ls
+tools: read, grep, ffgrep, fffind, ls, rpi_git_diff
 thinking: medium
 systemPromptMode: replace
 inheritProjectContext: true
@@ -19,7 +19,7 @@ Input: a task directory (and/or a specific plan artifact path) and a base branch
 Process:
 1. Locate the plan: use the provided path, or find the latest `*plan*.md` in the task dir. If none exists, state that no deviation analysis is possible.
 2. Extract the planned changes: all file changes (create/modify/delete), key patterns, phase breakdown, and specific code examples the plan specifies.
-3. Analyze the actual implementation: use `git diff base...HEAD --name-only` and `git diff base...HEAD`; read changed files to understand what was done.
+3. Analyze the actual implementation: use `rpi_git_diff` with the supplied base ref, then read changed files to understand what was done.
 4. Categorize into exactly these four sections:
    - Implemented as planned
    - Deviations/surprises (plan said X, implementation does Y, and the likely reason)

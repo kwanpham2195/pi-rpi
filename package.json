@@ -19,6 +19,7 @@
     "prompts",
     "src",
     "README.md",
+    "CHANGELOG.md",
     "SAMPLES.md"
   ],
   "scripts": {
@@ -41,22 +42,16 @@
       ]
     }
   },
-  "dependencies": {
-    "pi-subagents": "^0.50.0"
-  },
-  "bundledDependencies": [
-    "pi-subagents"
-  ],
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.80.3",
     "@earendil-works/pi-agent-core": "0.80.3",
+    "@earendil-works/pi-ai": "0.80.3",
     "@earendil-works/pi-coding-agent": "0.80.3",
     "@earendil-works/pi-tui": "0.80.3",
     "@types/node": "^24.0.0",

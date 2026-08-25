@@ -35,7 +35,9 @@ export type ReceiptKind =
   | "status-change"
   | "approval"
   | "flow-change"
+  | "base-branch-change"
   | "phase-commit"
+  | "agent-run"
   | "migration"
   | "drift";
 
