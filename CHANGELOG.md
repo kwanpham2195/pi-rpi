@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Cleared unavailable persisted task selections before they can inject agent context or run task tools.
+- Fixed failed agent-run rendering, task-footer clearing after tree navigation, per-turn task context, and full-output recovery for truncated results.
+- Added persistent task selection, durable task status reports, and live queued/running updates for research, implementation, and review runs.
+- Required Pi 0.84.4 or newer for RPI's durable TUI entry renderers.
 
 - Create new tickets as `ticket.md` and new artifacts as `NN-<type>-<description>.md`.
 - Restored Pi-native upstream skill templates and guidance.

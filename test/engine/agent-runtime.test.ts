@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { rpcCall, startResearch } from "../../src/agent-runtime.ts";
+import { implementPhase, rpcCall, startResearch } from "../../src/agent-runtime.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // A minimal fake ExtensionAPI EventBus to let startResearch run without pi.
@@ -92,6 +92,7 @@ test("startResearch records spawn before onSpawn and polls only after the receip
         events.push(data.method);
         if (data.method === "spawn") {
           handlers.get(`subagents:rpc:v1:reply:${data.requestId}`)?.({ version: 1, requestId: data.requestId, success: true, data: { text: "spawn", details: { runId: "ordered-run" } } });
+
         }
         if (data.method === "status") {
           handlers.get(`subagents:rpc:v1:reply:${data.requestId}`)?.({ version: 1, requestId: data.requestId, success: true, data: { text: "done", details: { mode: "status", results: [] }, asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "ordered-run", state: "complete" }] } } });
@@ -104,6 +105,32 @@ test("startResearch records spawn before onSpawn and polls only after the receip
     onSpawn: async (runId) => { assert.equal(runId, "ordered-run"); events.push("onSpawn"); },
   });
   assert.deepEqual(events, ["spawn", "onSpawn", "status"]);
+});
+
+test("startResearch emits queued and polled nonterminal progress", async () => {
+  const handlers = new Map<string, (data: unknown) => void>();
+  let statusCalls = 0;
+  const progress: Array<{ runId: string; state: string; pollCount: number }> = [];
+  const pi = {
+    events: {
+      on: (channel: string, handler: (data: unknown) => void) => { handlers.set(channel, handler); return () => handlers.delete(channel); },
+      emit: (_channel: string, data: { method: string; requestId: string }) => {
+        const state = data.method === "status" && ++statusCalls === 1 ? "running" : "complete";
+        const reply = data.method === "spawn"
+          ? { version: 1, requestId: data.requestId, success: true, data: { text: "spawn", details: { runId: "progress-run" } } }
+          : { version: 1, requestId: data.requestId, success: true, data: { text: state, asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "progress-run", state }] } } };
+        handlers.get(`subagents:rpc:v1:reply:${data.requestId}`)?.(reply);
+      },
+    },
+  } as unknown as ExtensionAPI;
+  await startResearch(pi, ["artifact-locator", "artifact-analyzer"], ["a", "b"], "/tmp", {
+    timeoutMs: 50, pollIntervalMs: 1, completionGraceMs: 0,
+    onProgress: (update) => { progress.push(update); },
+  });
+  assert.deepEqual(progress, [
+    { runId: "progress-run", state: "queued", pollCount: 0 },
+    { runId: "progress-run", state: "running", pollCount: 1 },
+  ]);
 });
 
 test("startResearch interrupts then stops the owned run when onSpawn rejects", async () => {
@@ -224,4 +251,84 @@ test("startResearch interrupts an owned run after caller cancellation", async ()
     /Operation aborted/,
   );
   assert.deepEqual(methods, ["spawn", "interrupt"]);
+});
+
+test("implementPhase reports its configured timeout without unavailable-agent guidance", async () => {
+  const handlers = new Map<string, (data: unknown) => void>();
+  const methods: string[] = [];
+  const pi = {
+    events: {
+      on: (channel: string, handler: (data: unknown) => void) => { handlers.set(channel, handler); return () => handlers.delete(channel); },
+      emit: (_channel: string, data: { method: string; requestId: string }) => {
+        methods.push(data.method);
+        const reply = data.method === "spawn"
+          ? { version: 1, requestId: data.requestId, success: true, data: { text: "spawn", details: { runId: "phase-timeout-run" } } }
+          : data.method === "status"
+            ? { version: 1, requestId: data.requestId, success: true, data: { text: "running", asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "phase-timeout-run", state: "running" }] } } }
+            : { version: 1, requestId: data.requestId, success: true, data: { text: "interrupted" } };
+        handlers.get(`subagents:rpc:v1:reply:${data.requestId}`)?.(reply);
+      },
+    },
+  } as unknown as ExtensionAPI;
+
+  await assert.rejects(
+    implementPhase(pi, "artifact-implementer", "Implement phase", "/tmp", { phaseId: "phase-3", timeoutMs: 10, pollIntervalMs: 1, completionGraceMs: 0 }),
+    (error: Error) => {
+      assert.match(error.message, /The implementation phase timed out after 10ms/);
+      assert.match(error.message, /phase phase-3/);
+      assert.match(error.message, /run phase-timeout-run/);
+      assert.doesNotMatch(error.message, /pi install npm:pi-subagents/);
+      return true;
+    },
+  );
+  assert.ok(methods.includes("status"));
+  assert.ok(methods.includes("interrupt"));
+});
+
+test("implementPhase defaults its completion timeout to 900000ms", async () => {
+  const handlers = new Map<string, (data: unknown) => void>();
+  const pi = {
+    events: {
+      on: (channel: string, handler: (data: unknown) => void) => { handlers.set(channel, handler); return () => handlers.delete(channel); },
+      emit: (_channel: string, data: { method: string; requestId: string }) => {
+        const reply = data.method === "spawn"
+          ? { version: 1, requestId: data.requestId, success: true, data: { text: "spawn", details: { runId: "default-timeout-run" } } }
+          : data.method === "status"
+            ? { version: 1, requestId: data.requestId, success: true, data: { text: "running", asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "default-timeout-run", state: "running" }] } } }
+            : { version: 1, requestId: data.requestId, success: true, data: { text: "interrupted" } };
+        handlers.get(`subagents:rpc:v1:reply:${data.requestId}`)?.(reply);
+      },
+    },
+  } as unknown as ExtensionAPI;
+  const originalNow = Date.now;
+  const now = [0, 0, 900_001];
+  Date.now = () => now.shift() ?? 900_001;
+  try {
+    await assert.rejects(
+      implementPhase(pi, "artifact-implementer", "Implement phase", "/tmp", { pollIntervalMs: 0, completionGraceMs: 0 }),
+      /The implementation phase timed out after 900000ms/,
+    );
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("implementPhase preserves a timed-out spawn RPC error without cleanup", async () => {
+  const methods: string[] = [];
+  const pi = {
+    events: {
+      on: () => () => {},
+      emit: (_channel: string, data: { method: string }) => { methods.push(data.method); },
+    },
+  } as unknown as ExtensionAPI;
+
+  await assert.rejects(
+    implementPhase(pi, "artifact-implementer", "Implement phase", "/tmp", { phaseId: "phase-3", timeoutMs: 10 }),
+    (error: Error) => {
+      assert.match(error.message, /RPC spawn timed out/);
+      assert.doesNotMatch(error.message, /implementation phase timed out/i);
+      return true;
+    },
+  );
+  assert.deepEqual(methods, ["spawn"]);
 });

@@ -14,7 +14,7 @@ pi install -l /path/to/pi-rpi
 /rpi-task eng-1478-parent-child
 ```
 
-The selected task is available to commands and tools in this extension session. `rpi_get_task_context` restores a selection from a previous tool result.
+The selected task is available to commands and tools in this extension session. RPI saves that selection in session history, so Pi restores it when you return to the session. You can also call `rpi_get_task_context` with a slug to select a task explicitly.
 
 ## Create the document chain
 
@@ -34,13 +34,17 @@ Use `implement-outline` or `implement-plan` one phase at a time. After automated
 
 An agent-run receipt alone does not mark a phase committed or human-approved.
 
+## Follow agent-run progress
+
+`rpi_start_research`, `rpi_implement_phase`, and `rpi_review_implementation` update their Pi tool row as the child run starts and polls. A row first shows `queued`, then its latest nonterminal state. Expand the final row to read the bounded run output.
+
 ## Resume
 
-Use `/rpi-task eng-1478-parent-child` to select the task again. The manifest retains artifact state and receipts. Check plan or outline progress and verify the associated commit receipt before treating a phase as complete.
+Use `/rpi-task eng-1478-parent-child` to select the task again. Pi normally restores the task selected in that session. The manifest retains artifact state and receipts. Check plan or outline progress and verify the associated commit receipt before treating a phase as complete.
 
 ## Troubleshooting
 
 - Agent tools require `pi install` or `pi install -l`; `pi -e` loads only the extension surface.
-- Artifact reads and `rpi_git_diff` return bounded output with a truncation marker.
+- Artifact reads and `rpi_git_diff` return bounded output with a truncation marker. The marker names the full output file; artifact reads point to the original artifact file.
 - The stage guard rejects broad or ambiguous `git add` commands. Stage explicit source files instead.
 - `draft → approved` is invalid; set the artifact to `in-review` first.

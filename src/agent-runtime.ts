@@ -3,14 +3,21 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export type ResearchNode = "artifact-locator" | "artifact-analyzer" | "artifact-pattern-finder" | "artifact-web-researcher";
 export interface RunReceipt { runId: string; state: string; payload: unknown; }
+/** A spawned child run's current state, emitted after spawn and after every nonterminal poll. */
+export interface RunProgress { runId: string; state: string; pollCount: number; }
 export interface RunOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   onSpawn?: (runId: string) => Promise<void>;
+  onProgress?: (progress: RunProgress) => Promise<void> | void;
   /** Test and integration tuning; production polling defaults to two seconds. */
   pollIntervalMs?: number;
   /** Wait briefly for the richer completion event after terminal status. */
   completionGraceMs?: number;
+}
+
+export interface ImplementationPhaseOptions extends RunOptions {
+  phaseId?: string;
 }
 
 type RpcData = { text?: string; details?: Record<string, unknown>; isError?: boolean; [key: string]: unknown };
@@ -74,6 +81,7 @@ async function waitForCompletion(pi: ExtensionAPI, runId: string, options: RunOp
   const deadline = Date.now() + (options.timeoutMs ?? 240_000);
   const controller = new AbortController();
   let completion: Completion | undefined;
+  let pollCount = 0;
   const abort = () => controller.abort();
   const unsubscribe = pi.events.on("subagent:async-complete", (raw: unknown) => {
     const parsed = completionFromEvent(raw, runId);
@@ -91,6 +99,8 @@ async function waitForCompletion(pi: ExtensionAPI, runId: string, options: RunOp
       if (completion) return completion;
       if (!status.success) throw new Error(`child status failed: ${status.error.message}`);
       const state = stateFromStatus(status.data, runId);
+      pollCount += 1;
+      if (!TERMINAL_STATES.has(state)) await options.onProgress?.({ runId, state, pollCount });
       if (TERMINAL_STATES.has(state)) {
         const eventCompletion = await waitForCompletionEventGrace(() => completion, controller.signal, deadline, options);
         if (eventCompletion) return eventCompletion;
@@ -208,21 +218,46 @@ export async function startResearch(pi: ExtensionAPI, nodes: ResearchNode[], tas
   const items = nodes.map((agent, index) => `{ key: "n${index}", agent: ${JSON.stringify(agent)}, task: ${JSON.stringify(tasks[index] ?? "")}, context: "fresh", cwd: ${JSON.stringify(cwd)} }`).join(",\n        ");
   const spawn = await rpcCall(pi, "spawn", { workflowScript: `return runs.all([\n        ${items}\n      ])`, context: "fresh" }, options);
   const runId = runIdFrom(spawn);
-  try { await options.onSpawn?.(runId); } catch (cause: unknown) { await interruptThenStopOwnedRun(pi, runId); throw cause; }
+  await reportSpawnedRun(pi, runId, options);
   const completed = await waitForCompletion(pi, runId, options);
   return { runId, ...completed };
 }
 
-export async function implementPhase(pi: ExtensionAPI, agent: "artifact-implementer" | "artifact-outline-implementer", phaseTask: string, cwd: string, options: RunOptions = {}): Promise<RunReceipt> {
+export async function implementPhase(pi: ExtensionAPI, agent: "artifact-implementer" | "artifact-outline-implementer", phaseTask: string, cwd: string, options: ImplementationPhaseOptions = {}): Promise<RunReceipt> {
   const spawn = await rpcCall(pi, "spawn", { workflowScript: `return runs.run("main", { agent: ${JSON.stringify(agent)}, task: ${JSON.stringify(phaseTask)}, context: "fresh", cwd: ${JSON.stringify(cwd)} })`, context: "fresh" }, options);
   const runId = runIdFrom(spawn);
-  try { await options.onSpawn?.(runId); } catch (cause: unknown) { await interruptThenStopOwnedRun(pi, runId); throw cause; }
-  return { runId, ...(await waitForCompletion(pi, runId, options)) };
+  await reportSpawnedRun(pi, runId, options);
+  const timeoutMs = options.timeoutMs ?? 900_000;
+  try {
+    return { runId, ...(await waitForCompletion(pi, runId, { ...options, timeoutMs })) };
+  } catch (cause: unknown) {
+    if (!isTimeoutError(cause)) throw cause;
+    throw implementationPhaseTimeoutError(options.phaseId, runId, timeoutMs);
+  }
+}
+
+function isTimeoutError(cause: unknown): boolean {
+  return /timed out|did not reach a terminal state/i.test(cause instanceof Error ? cause.message : String(cause));
+}
+
+function implementationPhaseTimeoutError(phaseId: string | undefined, runId: string | undefined, timeoutMs: number): Error {
+  const identifiers = [phaseId && `phase ${phaseId}`, runId && `run ${runId}`].filter(Boolean).join(", ");
+  return new Error(`The implementation phase timed out after ${timeoutMs}ms${identifiers ? ` (${identifiers})` : ""}.`);
 }
 
 export async function reviewImplementation(pi: ExtensionAPI, task: string, cwd: string, options: RunOptions = {}): Promise<RunReceipt> {
   const spawn = await rpcCall(pi, "spawn", { workflowScript: `return runs.run("main", { agent: "artifact-implementation-reviewer", task: ${JSON.stringify(task)}, context: "fresh", cwd: ${JSON.stringify(cwd)} })`, context: "fresh" }, options);
   const runId = runIdFrom(spawn);
-  try { await options.onSpawn?.(runId); } catch (cause: unknown) { await interruptThenStopOwnedRun(pi, runId); throw cause; }
+  await reportSpawnedRun(pi, runId, options);
   return { runId, ...(await waitForCompletion(pi, runId, options)) };
+}
+
+async function reportSpawnedRun(pi: ExtensionAPI, runId: string, options: RunOptions): Promise<void> {
+  try {
+    await options.onSpawn?.(runId);
+    await options.onProgress?.({ runId, state: "queued", pollCount: 0 });
+  } catch (cause: unknown) {
+    await interruptThenStopOwnedRun(pi, runId);
+    throw cause;
+  }
 }
