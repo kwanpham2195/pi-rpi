@@ -117,7 +117,7 @@ function expandSkill(command: string): string {
 - For a visual UI, layout, state comparison, or concept too dense for Mermaid, create one focused HTML artifact. Match the product's colors, type, spacing, and components; use real labels and data; support desktop and mobile; then display it inline:
 
 ```task-artifact
-.humanlayer/tasks/{task-slug}/show-me-{description}.html
+.pi/artifacts/{task-slug}/show-me-{description}.html
 ```
 
 - Place each visual next to the short text it supports. Keep only the calls, files, props, states, and boundaries needed to answer the user's current question.

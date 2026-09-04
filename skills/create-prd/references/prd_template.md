@@ -54,7 +54,7 @@ sha: [result of git rev-parse HEAD]
 
 [if appropriate, inline html mockup]
 ```task-artifact
-.humanlayer/tasks/{task-slug}/mockup-{description}.html
+.pi/artifacts/{task-slug}/mockup-{description}.html
 ```
 
 [Explanation of mockup and any behavioral notes]

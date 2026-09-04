@@ -1,4 +1,4 @@
-[{TICKET_ID}]({TICKET_URL}) | [HumanLayer Task]({TASK URL}) | [PR Walkthrough (alpha)]({PR_WALKTHROUGH_URL})
+[{TICKET_ID}]({TICKET_URL}) | RPI task artifacts: `.pi/artifacts/{TASKSLUG}/` | [PR Walkthrough (alpha)]({PR_WALKTHROUGH_URL})
 
 ## Why the change
 

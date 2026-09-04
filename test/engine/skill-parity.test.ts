@@ -116,6 +116,16 @@ const UPSTREAM_0_39_0_ASSET_SHA256 = new Map([
   ["skills/review-artifact-comments/references/comment_xml_format.md", "60b8afc963c72fc7c357ca272de67721ce4f0f3e8e13fc887c51f75b2ddae5ac"],
 ]);
 
+const INTENTIONALLY_PI_ADAPTED_ASSET_PATHS = new Set([
+  "skills/create-plan/references/plan_final_answer_disabled.md",
+  "skills/iterate-plan/references/plan_final_answer_disabled.md",
+  "skills/create-prd/references/prd_template.md",
+  "skills/create-structure-outline/references/show-me.md",
+  "skills/describe-pr/references/describe_pr_final_answer.md",
+  "skills/describe-pr/references/pr_description_template.md",
+  "skills/describe-pr/references/show-me.md",
+]);
+
 
 const PI_EXTENSION_TOOL_NAMES = new Set([
   "rpi_read_artifact",
@@ -167,9 +177,15 @@ test("packaged skills retain the upstream 0.39.0 inventory and Pi-native contrac
   const assetPaths = relativeSkillFiles.filter((path) => !path.endsWith("/SKILL.md"));
   assert.deepEqual(assetPaths, [...UPSTREAM_0_39_0_ASSET_SHA256.keys()].sort());
   for (const [assetPath, expectedHash] of UPSTREAM_0_39_0_ASSET_SHA256) {
+    if (INTENTIONALLY_PI_ADAPTED_ASSET_PATHS.has(assetPath)) continue;
     const bytes = await readFile(resolve(pkgRoot, assetPath));
     const actualHash = createHash("sha256").update(bytes).digest("hex");
     assert.equal(actualHash, expectedHash, `${assetPath}: SHA-256 mismatch`);
+  }
+
+  for (const skillPath of relativeSkillFiles) {
+    const text = await readFile(resolve(pkgRoot, skillPath), "utf8");
+    assert.doesNotMatch(text, /\bhumanlayer\b/i, `${skillPath}: contains a HumanLayer reference`);
   }
 
   const skillPaths = relativeSkillFiles.filter((path) => path.endsWith("/SKILL.md"));
@@ -180,7 +196,6 @@ test("packaged skills retain the upstream 0.39.0 inventory and Pi-native contrac
     const unknownToolNames = [...new Set(usedToolNames.filter((name) => !PI_EXTENSION_TOOL_NAMES.has(name)))].sort();
     assert.deepEqual(unknownToolNames, [], `${skillPath}: uses unknown RPI tools`);
 
-    assert.doesNotMatch(text, /\.humanlayer\b/i, `${skillPath}: contains a .humanlayer path`);
     assert.doesNotMatch(text, /`(?:claude|humanlayer)(?:\s|`)/i, `${skillPath}: contains a legacy runtime command`);
     assert.doesNotMatch(text, /(?:^|\n)\s*(?:[$>]\s*)?(?:claude|humanlayer)(?:\s|$)/im, `${skillPath}: contains a legacy runtime command`);
     assert.doesNotMatch(text, /\b(?:Agent|Task|Read|Write|Edit|MultiEdit)\s*\(/, `${skillPath}: contains a legacy executable tool form`);

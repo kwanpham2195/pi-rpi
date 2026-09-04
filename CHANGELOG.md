@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Replaced stale HumanLayer paths and links in packaged skill templates with Pi artifact and workspace references.
 - Cleared unavailable persisted task selections before they can inject agent context or run task tools.
 - Fixed failed agent-run rendering, task-footer clearing after tree navigation, per-turn task context, and full-output recovery for truncated results.
 - Added persistent task selection, durable task status reports, and live queued/running updates for research, implementation, and review runs.

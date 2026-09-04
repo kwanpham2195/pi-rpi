@@ -1,7 +1,7 @@
 ### Status
 
 - PR: [#{number} - {title}]({pr_url})
-- Description saved: [.humanlayer/tasks/{task-dir}/pr-description.md](cloud permalink from hook)
+- Description saved as the active task's `pr-description` artifact in `.pi/artifacts/{task-dir}/`
 - Ticket: [{TICKET_ID}]({ticket_url}) (if applicable)
 
 ### Summary
@@ -23,4 +23,4 @@ The PR description has been updated at [pr_url].
 
 ---
 
-You can view the full document here: [pr-description.md](cloud permalink from hook)
+You can inspect the full document with `rpi_read_artifact`.
