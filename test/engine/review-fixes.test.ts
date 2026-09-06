@@ -92,8 +92,17 @@ test("resolvePrecedence slices upstream of fromType and prefers active versions"
   await createTask(base, { slug: "prec", title: "P", flow: "rpi", baseBranch: "main", ticketBody: "# T" });
   const taskDir = join(base, "prec");
   await createArtifact(taskDir, { type: "research-questions", description: "qs", content: "q", dependsOn: [] });
+  let manifest = await loadManifest(taskDir);
+  await setArtifactStatus(manifest, "research-questions", "in-review", taskDir);
+  manifest = await setArtifactStatus(manifest, "research-questions", "approved", taskDir);
   await createArtifact(taskDir, { type: "research", description: "r", content: "r", dependsOn: ["research-questions"] });
+  manifest = await loadManifest(taskDir);
+  await setArtifactStatus(manifest, "research", "in-review", taskDir);
+  manifest = await setArtifactStatus(manifest, "research", "approved", taskDir);
   await createArtifact(taskDir, { type: "design-discussion", description: "d", content: "d", dependsOn: ["research"] });
+  manifest = await loadManifest(taskDir);
+  await setArtifactStatus(manifest, "design-discussion", "in-review", taskDir);
+  manifest = await setArtifactStatus(manifest, "design-discussion", "approved", taskDir);
   await createArtifact(taskDir, { type: "structure-outline", description: "o", content: "o", dependsOn: ["design-discussion"] });
   const m = await loadManifest(taskDir);
 
@@ -112,6 +121,9 @@ test("mockup and diagram are auxiliary-enabled in rpi flow; prd is not", async (
   await createTask(base, { slug: "aux", title: "A", flow: "rpi", baseBranch: "main" });
   const taskDir = join(base, "aux");
   await createArtifact(taskDir, { type: "research-questions", description: "qs", content: "q", dependsOn: [] });
+  const manifest = await loadManifest(taskDir);
+  await setArtifactStatus(manifest, "research-questions", "in-review", taskDir);
+  await setArtifactStatus(manifest, "research-questions", "approved", taskDir);
   await createArtifact(taskDir, { type: "research", description: "r", content: "r", dependsOn: ["research-questions"] });
   // mockup is allowed in rpi (auxiliary supporting artifact)
   await createArtifact(taskDir, { type: "mockup", description: "picker", content: "<html></html>", dependsOn: [] });

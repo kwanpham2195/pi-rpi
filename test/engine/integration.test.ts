@@ -30,18 +30,26 @@ test("rpi-flow lifecycle mirrors the documented UI path", async () => {
 
   // questions -> research -> design -> outline -> (plan) -> implementation -> pr
   await createArtifact(taskDir, { type: "research-questions", description: "current-state", content: "Q", dependsOn: [] });
+  await setArtifactStatus(m, "research-questions", "in-review", taskDir);
+  m = await setArtifactStatus(m, "research-questions", "approved", taskDir);
   await createArtifact(taskDir, {
     type: "research",
     description: "parent-child",
     content: "R",
    dependsOn: ["research-questions"],
   });
+  m = await loadManifest(taskDir);
+  await setArtifactStatus(m, "research", "in-review", taskDir);
+  m = await setArtifactStatus(m, "research", "approved", taskDir);
   await createArtifact(taskDir, {
     type: "design-discussion",
     description: "parent-child",
     content: "D",
    dependsOn: ["research"],
   });
+  m = await loadManifest(taskDir);
+  await setArtifactStatus(m, "design-discussion", "in-review", taskDir);
+  m = await setArtifactStatus(m, "design-discussion", "approved", taskDir);
   const outline = await createArtifact(taskDir, {
     type: "structure-outline",
     description: "parent-child",

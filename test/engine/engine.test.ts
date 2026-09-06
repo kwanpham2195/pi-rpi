@@ -116,6 +116,8 @@ test("createArtifact assigns chronological NN names and validates flow", async (
   dependsOn: [],
   });
   assert.equal(r1.artifact.path, "01-research-questions-current-state.md");
+  await setArtifactStatus(r1.manifest, "research-questions", "in-review", taskDir);
+  await setArtifactStatus(r1.manifest, "research-questions", "approved", taskDir);
 
   const r2 = await createArtifact(taskDir, {
     type: "research",
@@ -130,6 +132,47 @@ test("createArtifact assigns chronological NN names and validates flow", async (
     createArtifact(taskDir, { type: "prd", description: "unused", content: "", dependsOn: [] }),
     /not enabled in flow/,
   );
+  await rm(base, { recursive: true, force: true });
+});
+
+test("createArtifact normalizes human descriptions and rejects unsafe filename input", async () => {
+  const base = await mkTmp();
+  await createTask(base, { slug: "description-input", title: "Description", flow: "freeform", baseBranch: "main" });
+  const taskDir = join(base, "description-input");
+  const created = await createArtifact(taskDir, {
+    type: "research", description: "Ship New__Artifact Feature", content: "", dependsOn: [],
+  });
+  assert.equal(created.artifact.path, "01-research-ship-new-artifact-feature.md");
+  for (const description of ["unsafe/name", "unsafe\\name", "unsafe.name", "---"]) {
+    await assert.rejects(
+      createArtifact(taskDir, { type: "research", description, content: "", dependsOn: [] }),
+      /Invalid description/,
+    );
+  }
+  await rm(base, { recursive: true, force: true });
+});
+
+test("createArtifact requires approved dependencies", async () => {
+  const base = await mkTmp();
+  await createTask(base, { slug: "dependency-status", title: "Dependencies", flow: "rpi", baseBranch: "main" });
+  const taskDir = join(base, "dependency-status");
+  const questions = await createArtifact(taskDir, {
+    type: "research-questions", description: "Questions", content: "", dependsOn: [],
+  });
+  await assert.rejects(
+    createArtifact(taskDir, { type: "research", description: "Research", content: "", dependsOn: ["research-questions"] }),
+    /Dependency "research-questions" has status "draft"/,
+  );
+  await setArtifactStatus(questions.manifest, "research-questions", "in-review", taskDir);
+  await assert.rejects(
+    createArtifact(taskDir, { type: "research", description: "Research", content: "", dependsOn: ["research-questions"] }),
+    /Dependency "research-questions" has status "in-review"/,
+  );
+  await setArtifactStatus(questions.manifest, "research-questions", "approved", taskDir);
+  const research = await createArtifact(taskDir, {
+    type: "research", description: "Research", content: "", dependsOn: ["research-questions"],
+  });
+  assert.equal(research.artifact.path, "02-research-research.md");
   await rm(base, { recursive: true, force: true });
 });
 
@@ -151,6 +194,8 @@ test("createArtifact validates dependencies", async () => {
   const questions = await createArtifact(taskDir, {
     type: "research-questions", description: "qs", content: "", dependsOn: [],
   });
+  await setArtifactStatus(questions.manifest, "research-questions", "in-review", taskDir);
+  await setArtifactStatus(questions.manifest, "research-questions", "approved", taskDir);
   await assert.rejects(
     createArtifact(taskDir, {
       type: "research", description: "omitted", content: "",
@@ -242,12 +287,18 @@ test("resolvePrecedence returns chain per flow, excluding research-questions", a
     content: "",
   dependsOn: [],
   });
+  let manifest = await loadManifest(taskDir);
+  await setArtifactStatus(manifest, "research-questions", "in-review", taskDir);
+  manifest = await setArtifactStatus(manifest, "research-questions", "approved", taskDir);
   await createArtifact(taskDir, {
     type: "research",
     description: "r",
     content: "",
     dependsOn: ["research-questions"],
   });
+  manifest = await loadManifest(taskDir);
+  await setArtifactStatus(manifest, "research", "in-review", taskDir);
+  manifest = await setArtifactStatus(manifest, "research", "approved", taskDir);
   await createArtifact(taskDir, {
     type: "design-discussion",
     description: "d",
@@ -273,6 +324,9 @@ test("changeFlow blocks when existing artifacts disabled in new flow, records re
   });
   const taskDir = join(base, "flow-test");
   await createArtifact(taskDir, { type: "research-questions", description: "qs", content: "", dependsOn: [] });
+  let manifest = await loadManifest(taskDir);
+  await setArtifactStatus(manifest, "research-questions", "in-review", taskDir);
+  manifest = await setArtifactStatus(manifest, "research-questions", "approved", taskDir);
   await createArtifact(taskDir, { type: "research", description: "x", content: "", dependsOn: ["research-questions"] });
   const m = await loadManifest(taskDir);
   // rpi -> oneshot would orphan research

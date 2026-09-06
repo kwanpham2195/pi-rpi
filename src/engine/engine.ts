@@ -195,6 +195,18 @@ export function validateDescription(description: string): string {
   return description;
 }
 
+/** Convert a human artifact description to a flat filename slug without accepting path-like input. */
+function normalizeArtifactDescription(description: string): string {
+  if (!description || typeof description !== "string") {
+    throw new EngineError("Invalid description: empty.");
+  }
+  if (/[\\/.]/.test(description)) {
+    throw new EngineError(`Invalid description: "${description}". Slashes and dots are not allowed.`);
+  }
+  const slug = description.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return validateDescription(slug);
+}
+
 // ---------------------------------------------------------------------------
 // Hashing
 // ---------------------------------------------------------------------------
@@ -723,13 +735,88 @@ function requiredActiveId(manifest: TaskManifest, predecessor: ArtifactType, typ
   return artifact.id;
 }
 
+export type SuggestedTaskActionKind = "review" | "iterate" | "create" | "implement" | "describe-pr" | "complete";
+
+/** A non-binding action suggestion derived from the task's current manifest state. */
+export interface SuggestedTaskAction {
+  kind: SuggestedTaskActionKind;
+  label: string;
+  artifactType?: ArtifactType;
+  optional?: true;
+}
+
+const OPTIONAL_SUGGESTION_ARTIFACT_TYPES = new Set<ArtifactType>(["ticket", "plan", "mockup", "diagram", "pr-walkthrough"]);
+
+function isArtifactCreationReady(manifest: TaskManifest, type: ArtifactType): boolean {
+  if (findArtifact(manifest, type)) return false;
+  try {
+    const dependencies = requiredDependencyIds(manifest, type);
+    return dependencies === undefined || dependencies.every((id) => findArtifact(manifest, id)?.status === "approved");
+  } catch (cause) {
+    if (cause instanceof EngineError) return false;
+    throw cause;
+  }
+}
+
+function suggestedCreationAction(manifest: TaskManifest, type: ArtifactType, optional = false): SuggestedTaskAction {
+  if (type === "implementation") {
+    const plan = findArtifact(manifest, "plan");
+    return { kind: "implement", label: plan?.status === "approved" ? "implement plan" : "implement outline", artifactType: type };
+  }
+  if (type === "pr-description") return { kind: "describe-pr", label: "describe pull request", artifactType: type };
+  return { kind: "create", label: `create ${type}${optional ? " (optional)" : ""}`, artifactType: type, ...(optional ? { optional: true as const } : {}) };
+}
+
+/**
+ * Suggest safe next task actions without imposing a workflow stage. Suggestions
+ * reflect the manifest's existing dependency rules; createArtifact remains the
+ * authoritative enforcement boundary.
+ */
+export function suggestTaskActions(manifest: TaskManifest): SuggestedTaskAction[] {
+  const activeArtifacts = manifest.artifacts.filter((artifact) => artifact.status !== "superseded");
+  const suggestionsForArtifacts = (artifacts: typeof activeArtifacts): SuggestedTaskAction[] => [
+    ...artifacts
+      .filter((artifact) => artifact.status === "in-review")
+      .map((artifact) => ({ kind: "review" as const, label: `review ${artifact.id} for approval`, artifactType: artifact.type })),
+    ...artifacts
+      .filter((artifact) => artifact.status === "draft")
+      .map((artifact) => ({ kind: "iterate" as const, label: `iterate ${artifact.id}`, artifactType: artifact.type })),
+  ];
+  const requiredArtifactSuggestions = suggestionsForArtifacts(
+    activeArtifacts.filter((artifact) => !OPTIONAL_SUGGESTION_ARTIFACT_TYPES.has(artifact.type)),
+  );
+  const optionalArtifactSuggestions = suggestionsForArtifacts(
+    activeArtifacts.filter((artifact) => OPTIONAL_SUGGESTION_ARTIFACT_TYPES.has(artifact.type)),
+  );
+  if (requiredArtifactSuggestions.length > 0) return requiredArtifactSuggestions;
+
+  if (manifest.flow === "freeform") {
+    return [{ kind: "create", label: "choose an artifact that fits the work" }];
+  }
+
+  const requiredTypes = FLOW_CHAINS[manifest.flow].filter((type) => !OPTIONAL_SUGGESTION_ARTIFACT_TYPES.has(type));
+  const primaryActions = requiredTypes
+    .filter((type) => isArtifactCreationReady(manifest, type))
+    .map((type) => suggestedCreationAction(manifest, type));
+  const optionalActions = (["plan", "mockup", "diagram"] as const)
+    .filter((type) => isTypeEnabled(manifest.flow, type) && isArtifactCreationReady(manifest, type))
+    .map((type) => suggestedCreationAction(manifest, type, true));
+
+  if (primaryActions.length > 0) return [...primaryActions, ...optionalArtifactSuggestions, ...optionalActions];
+  if (requiredTypes.every((type) => findArtifact(manifest, type)?.status === "approved")) {
+    return [{ kind: "complete", label: "workflow complete" }, ...optionalArtifactSuggestions, ...optionalActions];
+  }
+  if (optionalArtifactSuggestions.length > 0) return optionalArtifactSuggestions;
+  return optionalActions;
+}
+
 // ---------------------------------------------------------------------------
 // Artifact operations
 // ---------------------------------------------------------------------------
 
 export interface CreateArtifactInput {
   type: ArtifactType;
-  description: string; // flat kebab-case slug for the filename, e.g. "parent-child-tracking"
+  description: string; // human description normalized to a filename slug, e.g. "Parent child tracking"
   dependsOn: string[];
   content: string;
   supersedes?: string; // id (or logical type) of the artifact this replaces; must be approved
@@ -765,7 +852,7 @@ export async function createArtifact(
     }
 
     // Description -> flat kebab filename slug
-    const desc = validateDescription(input.description);
+    const desc = normalizeArtifactDescription(input.description);
 
     // Duplicate-type rejection unless superseding
     const activeSameType = manifest.artifacts.find(
@@ -818,6 +905,11 @@ export async function createArtifact(
       }
       if (depArt.type === input.type) {
         throw new EngineError(`Artifact cannot depend on itself (${input.type}).`);
+      }
+      if (input.type !== "ticket" && depArt.status !== "approved") {
+        throw new EngineError(
+          `Dependency "${depArt.id}" has status "${depArt.status}"; approve it before creating "${input.type}".`,
+        );
       }
       const chain = FLOW_CHAINS[manifest.flow];
       const di = chain.indexOf(depArt.type);

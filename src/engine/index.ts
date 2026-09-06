@@ -28,6 +28,7 @@ export {
   approve,
   assertStatusTransition,
   resolvePrecedence,
+  suggestTaskActions,
   changeFlow,
   setBaseBranch,
   recordRunId,
@@ -40,4 +41,6 @@ export type {
   CreateTaskInput,
   CreateArtifactInput,
   CreateArtifactResult,
+  SuggestedTaskAction,
+  SuggestedTaskActionKind,
 } from "./engine.ts";

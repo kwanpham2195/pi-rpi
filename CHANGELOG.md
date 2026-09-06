@@ -6,6 +6,8 @@
 - Fixed failed agent-run rendering, task-footer clearing after tree navigation, per-turn task context, and full-output recovery for truncated results.
 - Added persistent task selection, durable task status reports, and live queued/running updates for research, implementation, and review runs.
 - Required Pi 0.84.4 or newer for RPI's durable TUI entry renderers.
+- Normalized human artifact descriptions into safe kebab-case filenames and required approved dependencies before creating downstream artifacts.
+- Added configurable implementation phase timeouts and failure details for non-success terminal states.
 
 - Create new tickets as `ticket.md` and new artifacts as `NN-<type>-<description>.md`.
 - Restored Pi-native upstream skill templates and guidance.
