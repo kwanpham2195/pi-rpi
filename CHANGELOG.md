@@ -8,6 +8,7 @@
 - Required Pi 0.84.4 or newer for RPI's durable TUI entry renderers.
 - Normalized human artifact descriptions into safe kebab-case filenames and required approved dependencies before creating downstream artifacts.
 - Added configurable implementation phase timeouts and failure details for non-success terminal states.
+- Supported generic mode in creation skills so documents work with or without an RPI task.
 
 - Create new tickets as `ticket.md` and new artifacts as `NN-<type>-<description>.md`.
 - Restored Pi-native upstream skill templates and guidance.

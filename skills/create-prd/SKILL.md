@@ -1,57 +1,50 @@
 ---
 name: create-prd
-description: "Runs the product interview and writes the PRD artifact. Use in a prd-flow task after research, when product scope and success must be decided by the user before technical design."
+description: "Runs a product interview and writes a PRD when product scope and success must be settled before technical design."
 ---
 
 # Create PRD
 
-Use only when the user explicitly invokes this skill. Create a product requirements document that explains what the product should do and why. Keep technical implementation for the TDD.
-
-Run a guided product conversation. Settle the foundation first, then work through the solution one decision at a time. The PRD is always a coherent specification, never a Q&A transcript.
-
-Precedence: PRD > design discussion (if any) > research > ticket.
+Create a product requirements document that explains what the product should do and why. Keep technical implementation for the TDD. Settle the foundation first, then work through one decision at a time; the PRD is a coherent specification, never a Q&A transcript.
 
 ## Setup
 
-- Select the task with `rpi_get_task_context` or `/rpi-task`.
-- Read `ticket` and `research` fully with `rpi_read_artifact`. Read a design discussion only when it exists and is relevant. Never read `research-questions`.
-- Work from the available inputs. Cite their findings in the PRD without duplicating them. If context is thin, do not invent requirements; surface gaps during the interview.
-- When a decision needs more present-state evidence, use `rpi_start_research` with 2-6 matching registered nodes: `artifact-locator`, `artifact-analyzer`, `artifact-pattern-finder`, and, only when necessary, `artifact-web-researcher`. Fold factual findings into the relevant task artifact before using them.
+- **RPI mode:** Only when an active RPI task is already available, read available task artifacts with `rpi_read_artifact` and persist the PRD with RPI artifact tools.
+- **Generic mode:** Use user-provided context, research, and named files. Do not create or select an RPI task and do not call an RPI tool to discover one. Return the document in chat, writing it only to an explicitly user-named path.
+- Work from available inputs. Cite findings without duplicating them. If context is thin, surface gaps during the interview rather than inventing requirements.
 
 ## Create the Skeleton
 
-1. Load the registered `artifact-prd` prompt before creating content. Load `references/prd_template.md` only when its expanded PRD structure or inline visual layout is needed. It is a formatting aid, not an artifact path or tool contract.
-2. Create the PRD with `rpi_create_artifact`: type `prd`, description `<feature>`, `dependsOn: ["research"]`, and content based on `artifact-prd`.
-3. Keep the initial artifact minimal: a first-draft Problem to Solve and empty Success, Proposed Solution, and Solution Details sections. Do not add a preamble, setup text, or Q&A log.
-4. Open the foundation immediately with exactly one question. Quote the drafted Problem to Solve so the user can react to the actual text.
+1. Load `references/prd_template.md` for the canonical PRD structure and inline visual layout.
+2. Draft a minimal PRD with a first-draft Problem to Solve and empty Success, Proposed Solution, and Solution Details sections. Do not add a preamble, setup text, or Q&A log.
+3. Open the foundation with exactly one question. Quote the drafted Problem to Solve so the user can react to the actual text.
+4. In RPI mode, create `prd` with `rpi_create_artifact`, description `<feature>`, and `dependsOn: ["research"]`. In generic mode, deliver the draft in chat or write it to the explicitly named path.
 
 ## Interview Rules
 
-- Ask exactly one independent question in each message. Options are allowed when they address that one decision, but never stack a second decision or a vague follow-up.
-- Every question gives options, tradeoffs, and a recommendation. Work through clarification and pushback without editing the PRD until the user clearly resolves the decision.
-- After resolution, use `rpi_update_artifact` to rework all affected prose, diagrams, mockups, order, and scope. The PRD must read as a unified description of what is known now, not a decision record.
-- Use takeaway headings that tell the reader the point of each section. Keep paragraphs short and place visuals beside the prose they explain.
-- Stay in product space: user experience, behavior, and outcomes. Put schemas, storage, and architecture questions in Deferred to TDD rather than interviewing on them here.
+- Ask exactly one independent question in each message. Options may address that decision, but never stack a second decision or vague follow-up.
+- Every question gives options, tradeoffs, and a recommendation. Do not edit the PRD until the user clearly resolves the decision.
+- After resolution, use `rpi_update_artifact` only in RPI mode; otherwise revise the delivered document or explicitly named file. Rework affected prose, diagrams, mockups, order, and scope so the PRD stays unified.
+- Use takeaway headings and short paragraphs. Put visuals beside the prose they explain.
+- Stay in product space: user experience, behavior, and outcomes. Put schemas, storage, and architecture under Deferred to TDD.
 
 ## Foundation
 
-1. Settle Problem to Solve first. Iterate until the user agrees, then rewrite that section with the agreed wording.
-2. Settle Success second. Propose a suitable success lever: a product metric, adoption signal, benchmark, error-rate or latency target, or qualitative measure. For a tiny change with no sensible lever, get the user’s agreement to record `none` instead of inventing a metric.
-3. Do not begin the solution interview until both Problem to Solve and Success are resolved and reflected in the PRD.
+1. Settle Problem to Solve first, then rewrite it with agreed wording.
+2. Settle Success second. Propose a metric, adoption signal, benchmark, error-rate or latency target, qualitative measure, or agreed `none` for a small change without a sensible lever.
+3. Do not begin the solution interview until both are resolved and reflected in the PRD.
 
 ## Solution Interview and Visuals
 
-1. Walk the solution tree one decision at a time. After each resolved decision, update Solution Details and any affected Proposed Solution, alternatives, out-of-scope content, and visuals.
-2. When visual behavior, layout, interaction, or states matter, create an HTML mockup as a `mockup` artifact with `rpi_create_artifact`, `dependsOn: ["prd"]`, and an appropriate description. Use the product’s documented design system; if it is unknown, research it before making the mockup.
-3. Keep each mockup focused on its decision and update it as the decision changes. Get user approval before embedding the approved mockup in the PRD.
+1. Walk the solution tree one decision at a time. After each resolution, update Solution Details and affected Proposed Solution, alternatives, out-of-scope content, and visuals.
+2. For visual behavior, layout, interaction, or states, create a focused HTML mockup using the documented product design system. In RPI mode, create a `mockup` artifact with `rpi_create_artifact`, `dependsOn: ["prd"]`; in generic mode, deliver it in chat or write it only to an explicitly named path.
+3. Keep each mockup focused on its decision and update it as the decision changes. Get user approval before embedding it in the PRD.
 4. Use diagrams or mockups whenever they explain a decision better than prose.
 
 ## Solution-Review Gate
 
-When the solution is complete, stop the interview and ask the user to read Solution Details top-to-bottom. Incorporate any corrections with `rpi_update_artifact`. The PRD is not resolved until the user explicitly approves this review gate.
+When the solution is complete, ask the user to review Solution Details top-to-bottom. Incorporate corrections through the active mode. The PRD is not resolved until the user explicitly approves this gate.
 
 ## Final Response
 
-Load `references/prd_final_answer_resolved.md` only after the user approves the Solution Details review gate. Use it only for concise completion wording; report the Pi manifest-relative artifact path returned by `rpi_create_artifact` and do not use unavailable commands, external links, or non-Pi artifact paths from the reference.
-
-Before the gate passes, report the PRD path, current success lever, and the one remaining review or interview decision. After it passes, report the PRD path, success lever, and that the Solution Details review gate passed. Do not add a separate summary.
+Load `references/prd_final_answer_resolved.md` only as concise wording guidance after the gate passes. In RPI mode, report the artifact path, success lever, and gate status. In generic mode, report the user-named output path when written, otherwise state that the document was delivered in chat; report the success lever and active decision or gate without promising a manifest-relative path or an RPI next stage.
