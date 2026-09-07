@@ -1,334 +1,750 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { implementPhase, rpcCall, startResearch } from "../../src/agent-runtime.ts";
+import { implementPhase, reviewImplementation, rpcCall, startResearch } from "../../src/agent-runtime.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { PI_SUBAGENTS_RPC_V1_FIXTURE } from "../fixtures/pi-subagents-rpc-v1.ts";
 
-// A minimal fake ExtensionAPI EventBus to let startResearch run without pi.
-function fakePi(): { pi: ExtensionAPI; captured: Array<{ method: string; params: unknown }> } {
-  const captured: Array<{ method: string; params: Record<string, unknown> }> = [];
-  let statusCalls = 0;
-  const handlers = new Map<string, (data: unknown) => void>();
-  const pi = {
-    events: {
-      on: (channel: string, h: (data: unknown) => void) => {
-        handlers.set(channel, h);
-        return () => handlers.delete(channel);
-      },
-      emit: (channel: string, data: unknown) => {
-        const req = data as { method?: string; requestId?: string; params?: Record<string, unknown> };
-        captured.push({ method: req.method ?? channel, params: req.params ?? {} });
-        if (req.method === "spawn") {
-          handlers.get(`subagents:rpc:v1:reply:${req.requestId}`)?.({
-            version: 1, requestId: req.requestId, success: true,
-            data: { text: "spawned", details: { runId: "wf-run-1" } },
-          } as never);
-        } else if (req.method === "status") {
-          statusCalls += 1;
-          handlers.get(`subagents:rpc:v1:reply:${req.requestId}`)?.({
-            version: 1, requestId: req.requestId, success: true,
-            data: { text: "complete output", details: { mode: "status", results: [] }, asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "wf-run-1", state: "complete" }] } },
-          } as never);
-        }
-      },
-    },
-  } as unknown as ExtensionAPI;
-  return { pi, captured };
-}
+type RpcRequest = { method: string; requestId: string; params: Record<string, unknown> };
+type RpcReply = (response: unknown) => void;
+type StatusNode = {
+  state: string;
+  activity?: Record<string, unknown>;
+  children?: Array<Record<string, unknown>>;
+};
 
-test("startResearch throws below 2 or above 6 nodes", async () => {
-  const { pi } = fakePi();
-  await assert.rejects(
-    startResearch(pi, ["artifact-locator"], ["a"], "/tmp"),
-    /at least 2 nodes/,
-  );
-  await assert.rejects(
-    startResearch(
-      pi,
-      ["artifact-locator", "artifact-analyzer", "artifact-pattern-finder", "artifact-web-researcher", "artifact-locator", "artifact-analyzer", "artifact-pattern-finder"],
-      ["a", "b", "c", "d", "e", "f", "g"],
-      "/tmp",
-    ),
-    /caps at 6 nodes/,
-  );
-});
+type BridgeConfig = {
+  runIds?: string[];
+  statuses?: StatusNode[];
+  pingData?: Record<string, unknown>;
+  onRequest?: (request: RpcRequest, reply: RpcReply, bridge: FakeBridge) => void;
+};
 
-test("startResearch requires node/task length match", async () => {
-  const { pi } = fakePi();
-  await assert.rejects(
-    startResearch(pi, ["artifact-locator", "artifact-analyzer"], ["only one"], "/tmp"),
-    /length mismatch/,
-  );
-});
+class FakeBridge {
+  readonly captured: RpcRequest[] = [];
+  readonly methods: string[] = [];
+  readonly handlers = new Map<string, (data: unknown) => void>();
+  private readonly runIds: string[];
+  private readonly statuses: StatusNode[];
+  private readonly pingData: Record<string, unknown>;
+  private readonly onRequest?: BridgeConfig["onRequest"];
+  private spawnCount = 0;
+  private statusCount = 0;
 
-test("startResearch emits a runs.all spawn and falls back to terminal status after the grace period", async () => {
-  const { pi, captured } = fakePi();
-  const receipt = await startResearch(
-    pi,
-    ["artifact-locator", "artifact-analyzer"],
-    ["find files", "analyze files"],
-    "/tmp/x",
-    { timeoutMs: 100, pollIntervalMs: 1, completionGraceMs: 5 },
-  );
-  assert.equal(receipt.runId, "wf-run-1");
-  assert.equal(receipt.state, "complete");
-  assert.deepEqual(receipt.payload, { text: "complete output", details: { mode: "status", results: [] }, asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "wf-run-1", state: "complete" }] } });
-  const spawn = captured.find((c) => c.method === "spawn");
-  assert.ok(spawn);
-  const script = String((spawn?.params as { workflowScript?: string })?.workflowScript ?? "");
-  assert.match(script, /runs\.all/);
-  assert.match(script, /artifact-locator/);
-  assert.match(script, /artifact-analyzer/);
-  assert.match(script, /"n0"/);
-  assert.match(script, /"n1"/);
-});
+  constructor(config: BridgeConfig = {}) {
+    this.runIds = config.runIds ?? ["run-1"];
+    this.statuses = config.statuses ?? [{ state: "complete" }];
+    this.pingData = config.pingData ?? PI_SUBAGENTS_RPC_V1_FIXTURE.ping;
+    this.onRequest = config.onRequest;
+  }
 
-test("startResearch records spawn before onSpawn and polls only after the receipt callback", async () => {
-  const events: string[] = [];
-  const handlers = new Map<string, (data: unknown) => void>();
-  const pi = {
-    events: {
-      on: (channel: string, handler: (data: unknown) => void) => { handlers.set(channel, handler); return () => handlers.delete(channel); },
-      emit: (_channel: string, data: { method: string; requestId: string }) => {
-        events.push(data.method);
-        if (data.method === "spawn") {
-          handlers.get(`subagents:rpc:v1:reply:${data.requestId}`)?.({ version: 1, requestId: data.requestId, success: true, data: { text: "spawn", details: { runId: "ordered-run" } } });
-
-        }
-        if (data.method === "status") {
-          handlers.get(`subagents:rpc:v1:reply:${data.requestId}`)?.({ version: 1, requestId: data.requestId, success: true, data: { text: "done", details: { mode: "status", results: [] }, asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "ordered-run", state: "complete" }] } } });
-        }
-      },
-    },
-  } as unknown as ExtensionAPI;
-  await startResearch(pi, ["artifact-locator", "artifact-analyzer"], ["a", "b"], "/tmp", {
-    timeoutMs: 25,
-    onSpawn: async (runId) => { assert.equal(runId, "ordered-run"); events.push("onSpawn"); },
-  });
-  assert.deepEqual(events, ["spawn", "onSpawn", "status"]);
-});
-
-test("startResearch emits queued and polled nonterminal progress", async () => {
-  const handlers = new Map<string, (data: unknown) => void>();
-  let statusCalls = 0;
-  const progress: Array<{ runId: string; state: string; pollCount: number }> = [];
-  const pi = {
-    events: {
-      on: (channel: string, handler: (data: unknown) => void) => { handlers.set(channel, handler); return () => handlers.delete(channel); },
-      emit: (_channel: string, data: { method: string; requestId: string }) => {
-        const state = data.method === "status" && ++statusCalls === 1 ? "running" : "complete";
-        const reply = data.method === "spawn"
-          ? { version: 1, requestId: data.requestId, success: true, data: { text: "spawn", details: { runId: "progress-run" } } }
-          : { version: 1, requestId: data.requestId, success: true, data: { text: state, asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "progress-run", state }] } } };
-        handlers.get(`subagents:rpc:v1:reply:${data.requestId}`)?.(reply);
-      },
-    },
-  } as unknown as ExtensionAPI;
-  await startResearch(pi, ["artifact-locator", "artifact-analyzer"], ["a", "b"], "/tmp", {
-    timeoutMs: 50, pollIntervalMs: 1, completionGraceMs: 0,
-    onProgress: (update) => { progress.push(update); },
-  });
-  assert.deepEqual(progress, [
-    { runId: "progress-run", state: "queued", pollCount: 0 },
-    { runId: "progress-run", state: "running", pollCount: 1 },
-  ]);
-});
-
-test("startResearch interrupts then stops the owned run when onSpawn rejects", async () => {
-  const methods: string[] = [];
-  const handlers = new Map<string, (data: unknown) => void>();
-  const pi = {
-    events: {
-      on: (channel: string, handler: (data: unknown) => void) => { handlers.set(channel, handler); return () => handlers.delete(channel); },
-      emit: (_channel: string, data: { method: string; requestId: string }) => {
-        methods.push(data.method);
-        const reply = data.method === "spawn"
-          ? { version: 1, requestId: data.requestId, success: true, data: { text: "spawn", details: { runId: "stop-run" } } }
-          : data.method === "interrupt"
-            ? { version: 1, requestId: data.requestId, success: false, error: { code: "invalid_state", message: "workflow root is running" } }
-            : { version: 1, requestId: data.requestId, success: true, data: { details: { state: "stopped" } } };
-        handlers.get(`subagents:rpc:v1:reply:${data.requestId}`)?.(reply);
-      },
-    },
-  } as unknown as ExtensionAPI;
-  await assert.rejects(
-    startResearch(pi, ["artifact-locator", "artifact-analyzer"], ["a", "b"], "/tmp", {
-      onSpawn: async () => { throw new Error("receipt failed"); },
-      timeoutMs: 25,
-    }),
-    /receipt failed/,
-  );
-  assert.deepEqual(methods, ["spawn", "interrupt", "stop"]);
-});
-
-test("rpcCall rejects invalid synchronous replies and clears its timeout after a synchronous success", async () => {
-  const invalidHandlers = new Map<string, (data: unknown) => void>();
-  const invalidPi = {
-    events: {
-      on: (channel: string, handler: (data: unknown) => void) => { invalidHandlers.set(channel, handler); return () => invalidHandlers.delete(channel); },
-      emit: (_channel: string, data: { requestId: string }) => {
-        queueMicrotask(() => invalidHandlers.get(`subagents:rpc:v1:reply:${data.requestId}`)?.({ invalid: true }));
-      },
-    },
-  } as unknown as ExtensionAPI;
-  await assert.rejects(rpcCall(invalidPi, "status", {}, { timeoutMs: 25 }), /Invalid pi-subagents RPC reply envelope/);
-
-  const successHandlers = new Map<string, (data: unknown) => void>();
-  let unsubscribeCalls = 0;
-  const successPi = {
+  readonly pi = {
     events: {
       on: (channel: string, handler: (data: unknown) => void) => {
-        successHandlers.set(channel, handler);
-        return () => { unsubscribeCalls += 1; successHandlers.delete(channel); };
+        this.handlers.set(channel, handler);
+        return () => this.handlers.delete(channel);
       },
-      emit: (_channel: string, data: { requestId: string }) => {
-        successHandlers.get(`subagents:rpc:v1:reply:${data.requestId}`)?.({ version: 1, requestId: data.requestId, success: true, data: { text: "ok" } });
-      },
-    },
-  } as unknown as ExtensionAPI;
-  const started = performance.now();
-  await rpcCall(successPi, "status", {}, { timeoutMs: 100 });
-  assert.ok(performance.now() - started < 50);
-  assert.equal(unsubscribeCalls, 1);
-});
-
-test("terminal status waits briefly for matching completion summaries", async () => {
-  const methods: string[] = [];
-  const handlers = new Map<string, (data: unknown) => void>();
-  const pi = {
-    events: {
-      on: (channel: string, handler: (data: unknown) => void) => { handlers.set(channel, handler); return () => handlers.delete(channel); },
-      emit: (_channel: string, data: { method: string; requestId: string }) => {
-        methods.push(data.method);
-        if (data.method === "spawn") {
-          handlers.get(`subagents:rpc:v1:reply:${data.requestId}`)?.({ version: 1, requestId: data.requestId, success: true, data: { text: "spawn", details: { runId: "event-run" } } });
+      emit: (_channel: string, raw: unknown) => {
+        const request = raw as RpcRequest;
+        this.captured.push(request);
+        this.methods.push(request.method);
+        const reply = (response: unknown) => this.handlers.get(`subagents:rpc:v1:reply:${request.requestId}`)?.(response);
+        if (this.onRequest) {
+          this.onRequest(request, reply, this);
           return;
         }
-        if (data.method === "status") {
-          handlers.get(`subagents:rpc:v1:reply:${data.requestId}`)?.({
+        if (request.method === "ping") {
+          reply({ version: 1, requestId: request.requestId, success: true, data: this.pingData });
+          return;
+        }
+        if (request.method === "spawn") {
+          const runId = this.runIds[Math.min(this.spawnCount++, this.runIds.length - 1)] ?? "run-1";
+          reply({ version: 1, requestId: request.requestId, success: true, data: { text: "spawned", details: { runId } } });
+          return;
+        }
+        if (request.method === "status") {
+          const status = this.statuses[Math.min(this.statusCount++, this.statuses.length - 1)] ?? { state: "running" };
+          reply({
             version: 1,
-            requestId: data.requestId,
+            requestId: request.requestId,
             success: true,
-            data: { text: "terminal status text", details: { mode: "status", results: [] }, asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "event-run", state: "complete" }] } },
+            data: {
+              text: status.state,
+              asyncSnapshot: {
+                kind: "pi-subagents.async-status-snapshot",
+                version: 1,
+                runs: [{ id: request.params.id, state: status.state, ...(status.activity ? { activity: status.activity } : {}), ...(status.children ? { children: status.children } : {}) }],
+              },
+            },
           });
-          setTimeout(() => handlers.get("subagent:async-complete")?.({ runId: "event-run", state: "complete", results: [{ agent: "artifact-locator", summary: "found files" }, { agent: "artifact-analyzer", summary: "analyzed files" }], output: "child output" }), 5);
-        }
-      },
-    },
-  } as unknown as ExtensionAPI;
-  const started = performance.now();
-  const receipt = await startResearch(pi, ["artifact-locator", "artifact-analyzer"], ["a", "b"], "/tmp", { timeoutMs: 100, pollIntervalMs: 1, completionGraceMs: 50 });
-  assert.ok(performance.now() - started < 75);
-  assert.equal(receipt.state, "complete");
-  assert.deepEqual(receipt.payload, {
-    runId: "event-run",
-    state: "complete",
-    results: [{ agent: "artifact-locator", summary: "found files" }, { agent: "artifact-analyzer", summary: "analyzed files" }],
-    output: "child output",
-  });
-  assert.deepEqual(methods, ["spawn", "status"]);
-});
-
-test("startResearch interrupts an owned run after caller cancellation", async () => {
-  const methods: string[] = [];
-  const handlers = new Map<string, (data: unknown) => void>();
-  const controller = new AbortController();
-  const pi = {
-    events: {
-      on: (channel: string, handler: (data: unknown) => void) => { handlers.set(channel, handler); return () => handlers.delete(channel); },
-      emit: (_channel: string, data: { method: string; requestId: string }) => {
-        methods.push(data.method);
-        if (data.method === "spawn") {
-          handlers.get(`subagents:rpc:v1:reply:${data.requestId}`)?.({ version: 1, requestId: data.requestId, success: true, data: { text: "spawn", details: { runId: "cancel-run" } } });
-          queueMicrotask(() => controller.abort());
           return;
         }
-        handlers.get(`subagents:rpc:v1:reply:${data.requestId}`)?.({ version: 1, requestId: data.requestId, success: true, data: { details: { state: "paused" } } });
+        reply({ version: 1, requestId: request.requestId, success: true, data: { text: request.method } });
       },
     },
   } as unknown as ExtensionAPI;
-  await assert.rejects(
-    startResearch(pi, ["artifact-locator", "artifact-analyzer"], ["a", "b"], "/tmp", { signal: controller.signal }),
-    /Operation aborted/,
-  );
-  assert.deepEqual(methods, ["spawn", "interrupt"]);
+
+  emitCompletion(payload: Record<string, unknown>): void {
+    this.handlers.get("subagent:async-complete")?.(payload);
+  }
+
+  statusIndex(): number {
+    return this.statusCount;
+  }
+}
+
+function statusBridge(statuses: StatusNode[], runIds?: string[]): FakeBridge {
+  return new FakeBridge({ statuses, runIds });
+}
+
+function rpcFixtureBridge(): FakeBridge {
+  const fixture = PI_SUBAGENTS_RPC_V1_FIXTURE;
+  let state: string = fixture.status.asyncSnapshot.runs[0].state;
+  return new FakeBridge({ onRequest: (request, reply) => {
+    const respond = (data: Record<string, unknown>) => reply({ version: 1, requestId: request.requestId, success: true, data });
+    if (request.method === "ping") return respond(fixture.ping);
+    if (request.method === "spawn") return respond(fixture.spawn);
+    assert.equal(request.params.id, fixture.spawn.details.runId);
+    if (request.method === "status") {
+      return respond(state === "running" ? fixture.status : {
+        ...fixture.status,
+        asyncSnapshot: {
+          ...fixture.status.asyncSnapshot,
+          runs: fixture.status.asyncSnapshot.runs.map((run) => ({ ...run, state })),
+        },
+      });
+    }
+    if (request.method === "interrupt" || request.method === "stop") {
+      const response = fixture[request.method];
+      state = response.details.state;
+      return respond(response);
+    }
+    assert.fail(`Unexpected fixture RPC method: ${request.method}`);
+  } });
+}
+
+test("RPC v1 fixture supplies spawn, running progress, and completion with the default implementation timeout", async () => {
+  const bridge = rpcFixtureBridge();
+  const progress: unknown[] = [];
+  const receipt = await implementPhase(bridge.pi, "artifact-implementer", "task", "/tmp", {
+    pollIntervalMs: 0,
+    onProgress: (update) => {
+      if (update.state !== "running") return;
+      progress.push(update);
+      bridge.emitCompletion(PI_SUBAGENTS_RPC_V1_FIXTURE.completion);
+    },
+  });
+
+  assert.deepEqual(receipt, {
+    runId: "fixture-run",
+    state: "complete",
+    payload: PI_SUBAGENTS_RPC_V1_FIXTURE.completion,
+  });
+  assert.deepEqual(progress, [{
+    runId: "fixture-run", state: "running", pollCount: 1,
+    activity: { currentTool: "bash", turnCount: 1, toolCount: 2 },
+  }]);
+  assert.deepEqual(PI_SUBAGENTS_RPC_V1_FIXTURE.status.asyncSnapshot, {
+    kind: "pi-subagents.async-status-snapshot",
+    version: 1,
+    generatedAt: 1_788_739_200_000,
+    caps: { maxRuns: 20, maxChildrenPerNode: 8, maxDepth: 3, maxStringLength: 160, maxSerializedBytes: 32 * 1024 },
+    omitted: { runs: 0, children: 0, byteLimitExceeded: false },
+    runs: [{ id: "fixture-run", kind: "subagent", label: "artifact-implementer", state: "running", activity: { currentTool: "bash", turnCount: 1, toolCount: 2 } }],
+  });
+  assert.equal(bridge.captured.find((request) => request.method === "spawn")?.params.timeoutMs, 900_000);
+  assert.equal(bridge.handlers.size, 0);
 });
 
-test("implementPhase reports its configured timeout without unavailable-agent guidance", async () => {
-  const handlers = new Map<string, (data: unknown) => void>();
-  const methods: string[] = [];
-  const pi = {
-    events: {
-      on: (channel: string, handler: (data: unknown) => void) => { handlers.set(channel, handler); return () => handlers.delete(channel); },
-      emit: (_channel: string, data: { method: string; requestId: string }) => {
-        methods.push(data.method);
-        const reply = data.method === "spawn"
-          ? { version: 1, requestId: data.requestId, success: true, data: { text: "spawn", details: { runId: "phase-timeout-run" } } }
-          : data.method === "status"
-            ? { version: 1, requestId: data.requestId, success: true, data: { text: "running", asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "phase-timeout-run", state: "running" }] } } }
-            : { version: 1, requestId: data.requestId, success: true, data: { text: "interrupted" } };
-        handlers.get(`subagents:rpc:v1:reply:${data.requestId}`)?.(reply);
-      },
-    },
-  } as unknown as ExtensionAPI;
+test("RPC v1 interrupt fixture reconciles caller cancellation to paused", async () => {
+  const bridge = rpcFixtureBridge();
+  const controller = new AbortController();
+  await assert.rejects(implementPhase(bridge.pi, "artifact-implementer", "task", "/tmp", {
+    signal: controller.signal,
+    pollIntervalMs: 0,
+    onProgress: (update) => { if (update.state === "running") controller.abort(); },
+  }), { name: "AbortError", message: "Operation aborted" });
 
-  await assert.rejects(
-    implementPhase(pi, "artifact-implementer", "Implement phase", "/tmp", { phaseId: "phase-3", timeoutMs: 10, pollIntervalMs: 1, completionGraceMs: 0 }),
-    (error: Error) => {
-      assert.match(error.message, /The implementation phase timed out after 10ms/);
-      assert.match(error.message, /phase phase-3/);
-      assert.match(error.message, /run phase-timeout-run/);
-      assert.doesNotMatch(error.message, /pi install npm:pi-subagents/);
-      return true;
-    },
-  );
-  assert.ok(methods.includes("status"));
-  assert.ok(methods.includes("interrupt"));
+  assert.ok(bridge.captured.some((request) => request.method === "interrupt" && request.params.id === "fixture-run"));
+  assert.equal(bridge.methods.includes("stop"), false);
+  assert.equal(bridge.handlers.size, 0);
 });
 
-test("implementPhase defaults its completion timeout to 900000ms", async () => {
-  const handlers = new Map<string, (data: unknown) => void>();
-  const pi = {
-    events: {
-      on: (channel: string, handler: (data: unknown) => void) => { handlers.set(channel, handler); return () => handlers.delete(channel); },
-      emit: (_channel: string, data: { method: string; requestId: string }) => {
-        const reply = data.method === "spawn"
-          ? { version: 1, requestId: data.requestId, success: true, data: { text: "spawn", details: { runId: "default-timeout-run" } } }
-          : data.method === "status"
-            ? { version: 1, requestId: data.requestId, success: true, data: { text: "running", asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "default-timeout-run", state: "running" }] } } }
-            : { version: 1, requestId: data.requestId, success: true, data: { text: "interrupted" } };
-        handlers.get(`subagents:rpc:v1:reply:${data.requestId}`)?.(reply);
-      },
+test("RPC v1 stop fixture reconciles an implementation deadline to stopped", async () => {
+  const bridge = rpcFixtureBridge();
+  await assert.rejects(implementPhase(bridge.pi, "artifact-implementer", "task", "/tmp", {
+    runTimeoutMs: 0,
+  }), { message: "The implementation phase timed out after 0ms (run fixture-run)." });
+
+  assert.ok(bridge.captured.some((request) => request.method === "stop" && request.params.id === "fixture-run"));
+  assert.equal(bridge.methods.includes("interrupt"), false);
+  assert.equal(bridge.handlers.size, 0);
+});
+
+test("ping precedes spawn and missing lifecycle capabilities fail before launch", async () => {
+  const bridge = new FakeBridge({ pingData: { version: 1, methods: ["ping", "status", "spawn"] } });
+
+  await assert.rejects(
+    implementPhase(bridge.pi, "artifact-implementer", "Implement", "/tmp", { runTimeoutMs: 10 }),
+    /missing required methods: interrupt, stop/,
+  );
+  assert.deepEqual(bridge.methods, ["ping"]);
+});
+
+test("startResearch rejects invalid fanout shapes before RPC launch", async () => {
+  const cases = [
+    {
+      nodes: ["artifact-locator"],
+      tasks: ["a"],
+      error: /at least 2 nodes/,
     },
-  } as unknown as ExtensionAPI;
-  const originalNow = Date.now;
-  const now = [0, 0, 900_001];
-  Date.now = () => now.shift() ?? 900_001;
-  try {
-    await assert.rejects(
-      implementPhase(pi, "artifact-implementer", "Implement phase", "/tmp", { pollIntervalMs: 0, completionGraceMs: 0 }),
-      /The implementation phase timed out after 900000ms/,
-    );
-  } finally {
-    Date.now = originalNow;
+    {
+      nodes: ["artifact-locator", "artifact-analyzer", "artifact-pattern-finder", "artifact-web-researcher", "artifact-locator", "artifact-analyzer", "artifact-pattern-finder"],
+      tasks: ["a", "b", "c", "d", "e", "f", "g"],
+      error: /caps at 6 nodes/,
+    },
+    {
+      nodes: ["artifact-locator", "artifact-analyzer"],
+      tasks: ["only one"],
+      error: /length mismatch/,
+    },
+  ] as const;
+
+  for (const { nodes, tasks, error } of cases) {
+    const bridge = new FakeBridge();
+    await assert.rejects(startResearch(bridge.pi, [...nodes], [...tasks], "/tmp"), error);
+    assert.deepEqual(bridge.methods, []);
   }
 });
 
-test("implementPhase preserves a timed-out spawn RPC error without cleanup", async () => {
-  const methods: string[] = [];
-  const pi = {
-    events: {
-      on: () => () => {},
-      emit: (_channel: string, data: { method: string }) => { methods.push(data.method); },
+test("startResearch persists the spawn receipt before the first status poll", async () => {
+  const events: string[] = [];
+  let receiptPersisted = false;
+  const bridge = new FakeBridge({ onRequest: (request, reply) => {
+    events.push(request.method);
+    const respond = (data: Record<string, unknown>) => reply({ version: 1, requestId: request.requestId, success: true, data });
+    if (request.method === "ping") return respond(PI_SUBAGENTS_RPC_V1_FIXTURE.ping);
+    if (request.method === "spawn") return respond({ text: "spawned", details: { runId: "ordered-run" } });
+    if (request.method === "status") {
+      assert.equal(receiptPersisted, true);
+      return respond({ asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "ordered-run", state: "complete" }] } });
+    }
+    assert.fail(`Unexpected RPC method: ${request.method}`);
+  } });
+
+  await startResearch(bridge.pi, ["artifact-locator", "artifact-analyzer"], ["a", "b"], "/tmp", {
+    runTimeoutMs: 100,
+    pollIntervalMs: 0,
+    completionGraceMs: 0,
+    onSpawn: async (runId) => {
+      assert.equal(runId, "ordered-run");
+      events.push("onSpawn:start");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      receiptPersisted = true;
+      events.push("onSpawn:end");
     },
-  } as unknown as ExtensionAPI;
+  });
+
+  assert.deepEqual(events, ["ping", "spawn", "onSpawn:start", "onSpawn:end", "status"]);
+});
+
+test("startResearch keeps workflowScript and passes the runtime timeout at the workflow root", async () => {
+  const bridge = statusBridge([{ state: "complete" }]);
+  const receipt = await startResearch(
+    bridge.pi,
+    ["artifact-locator", "artifact-analyzer"],
+    ["find files", "analyze files"],
+    "/tmp/x",
+    { runTimeoutMs: 100, pollIntervalMs: 1, completionGraceMs: 0 },
+  );
+
+  assert.equal(receipt.runId, "run-1");
+  assert.equal(receipt.state, "complete");
+  assert.deepEqual(bridge.methods, ["ping", "spawn", "status"]);
+  const spawn = bridge.captured[1];
+  assert.ok(spawn);
+  assert.equal(spawn.method, "spawn");
+  assert.equal(spawn.params.async, true);
+  assert.equal(spawn.params.timeoutMs, 100);
+  assert.match(String(spawn.params.workflowScript), /runs\.all/);
+  assert.match(String(spawn.params.workflowScript), /artifact-locator/);
+  assert.match(String(spawn.params.workflowScript), /artifact-analyzer/);
+});
+
+test("implementation and review use direct async child requests", async () => {
+  const bridge = statusBridge([{ state: "complete" }, { state: "complete" }], ["implementation-run", "review-run"]);
+  const implementation = await implementPhase(bridge.pi, "artifact-implementer", "authoritative task", "/tmp/project", {
+    runTimeoutMs: 123,
+    model: "provider/fast-model",
+    pollIntervalMs: 1,
+    completionGraceMs: 0,
+  });
+  const review = await reviewImplementation(bridge.pi, "review task", "/tmp/project", { pollIntervalMs: 1, completionGraceMs: 0 });
+
+  assert.equal(implementation.runId, "implementation-run");
+  assert.equal(review.runId, "review-run");
+  const spawns = bridge.captured.filter((request) => request.method === "spawn");
+  assert.equal(spawns.length, 2);
+  assert.deepEqual(spawns[0]?.params, {
+    agent: "artifact-implementer",
+    task: "authoritative task",
+    context: "fresh",
+    cwd: "/tmp/project",
+    async: true,
+    timeoutMs: 123,
+    model: "provider/fast-model",
+  });
+  assert.deepEqual(spawns[1]?.params, {
+    agent: "artifact-implementation-reviewer",
+    task: "review task",
+    context: "fresh",
+    cwd: "/tmp/project",
+    async: true,
+    timeoutMs: 240_000,
+  });
+  assert.equal("workflowScript" in (spawns[0]?.params ?? {}), false);
+  assert.equal("workflowScript" in (spawns[1]?.params ?? {}), false);
+});
+
+test("rpcCall uses the independently configured RPC deadline", async () => {
+  const bridge = new FakeBridge({ onRequest: (request, _reply) => {
+    if (request.method === "ping") return;
+  } });
+  const started = performance.now();
+  await assert.rejects(rpcCall(bridge.pi, "status", {}, { rpcTimeoutMs: 5 }), /RPC status timed out/);
+  assert.ok(performance.now() - started < 100);
+});
+
+test("partial is terminal and is preserved from status snapshots", async () => {
+  const bridge = statusBridge([{ state: "partial" }]);
+  const receipt = await startResearch(bridge.pi, ["artifact-locator", "artifact-analyzer"], ["a", "b"], "/tmp", {
+    runTimeoutMs: 100,
+    pollIntervalMs: 1,
+    completionGraceMs: 0,
+  });
+
+  assert.equal(receipt.state, "partial");
+  assert.equal((receipt.payload as { asyncSnapshot: { runs: Array<{ state: string }> } }).asyncSnapshot.runs[0]?.state, "partial");
+});
+
+test("partial completion events are preserved", async () => {
+  const bridge = new FakeBridge();
+  const receipt = await implementPhase(bridge.pi, "artifact-implementer", "task", "/tmp", {
+    runTimeoutMs: 100,
+    pollIntervalMs: 1,
+    completionGraceMs: 10,
+    onSpawn: async () => { setTimeout(() => bridge.emitCompletion({ runId: "run-1", state: "partial", output: "settled evidence" }), 2); },
+  });
+  assert.equal(receipt.state, "partial");
+  assert.deepEqual(receipt.payload, { runId: "run-1", state: "partial", output: "settled evidence" });
+});
+
+test("status activity is parsed and minimal older snapshots remain valid", async () => {
+  const bridge = statusBridge([
+    { state: "running", activity: { currentTool: "bash", turnCount: 12, toolCount: 24 } },
+    { state: "complete" },
+  ]);
+  const progress: Array<{ state: string; pollCount: number; activity?: { currentTool?: string; turnCount?: number; toolCount?: number } }> = [];
+  await startResearch(bridge.pi, ["artifact-locator", "artifact-analyzer"], ["a", "b"], "/tmp", {
+    runTimeoutMs: 100,
+    pollIntervalMs: 1,
+    completionGraceMs: 0,
+    onProgress: (update) => { progress.push(update); },
+  });
+  assert.deepEqual(progress, [
+    { runId: "run-1", state: "queued", pollCount: 0 },
+    { runId: "run-1", state: "running", pollCount: 1, activity: { currentTool: "bash", turnCount: 12, toolCount: 24 } },
+  ]);
+
+  const minimal = statusBridge([{ state: "completed" }]);
+  const receipt = await startResearch(minimal.pi, ["artifact-locator", "artifact-analyzer"], ["a", "b"], "/tmp", {
+    runTimeoutMs: 100,
+    pollIntervalMs: 1,
+    completionGraceMs: 0,
+  });
+  assert.equal(receipt.state, "complete");
+});
+
+test("research progress selects the active nested child and bounds its tool label", async () => {
+  const nested = statusBridge([
+    { state: "running", children: [{ id: "child", state: "running", activity: { currentTool: "x".repeat(400), turnCount: 3, toolCount: 4 } }] },
+    { state: "complete" },
+  ]);
+  const progress: Array<{ activity?: { currentTool?: string; turnCount?: number; toolCount?: number } }> = [];
+  await startResearch(nested.pi, ["artifact-locator", "artifact-analyzer"], ["a", "b"], "/tmp", {
+    runTimeoutMs: 100,
+    pollIntervalMs: 1,
+    completionGraceMs: 0,
+    onProgress: (update) => { progress.push(update); },
+  });
+  assert.equal(progress[1]?.activity?.currentTool?.length, 160);
+  assert.deepEqual(progress[1]?.activity, { currentTool: "x".repeat(160), turnCount: 3, toolCount: 4 });
+});
+
+test("an in-flight status RPC is bounded by the runtime deadline", async () => {
+  let stopRequested = false;
+  const bridge = new FakeBridge({
+    onRequest: (request, reply) => {
+      if (request.method === "ping") {
+        reply({ version: 1, requestId: request.requestId, success: true, data: { version: 1, methods: ["ping", "status", "spawn", "interrupt", "stop"] } });
+        return;
+      }
+      if (request.method === "spawn") {
+        reply({ version: 1, requestId: request.requestId, success: true, data: { text: "spawned", details: { runId: "in-flight-status-run" } } });
+        return;
+      }
+      if (request.method === "stop") {
+        stopRequested = true;
+        reply({ version: 1, requestId: request.requestId, success: true, data: { text: "stopped" } });
+        return;
+      }
+      if (request.method === "status" && stopRequested) {
+        reply({ version: 1, requestId: request.requestId, success: true, data: { asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "in-flight-status-run", state: "stopped" }] } } });
+      }
+    },
+  });
 
   await assert.rejects(
-    implementPhase(pi, "artifact-implementer", "Implement phase", "/tmp", { phaseId: "phase-3", timeoutMs: 10 }),
+    implementPhase(bridge.pi, "artifact-implementer", "task", "/tmp", { phaseId: "Phase 1: Test", runTimeoutMs: 10, pollIntervalMs: 0, completionGraceMs: 0 }),
     (error: Error) => {
-      assert.match(error.message, /RPC spawn timed out/);
-      assert.doesNotMatch(error.message, /implementation phase timed out/i);
+      assert.match(error.message, /implementation phase timed out after 10ms/);
+      assert.doesNotMatch(error.message, /RPC status timed out/);
       return true;
     },
   );
-  assert.deepEqual(methods, ["spawn"]);
+  assert.equal(bridge.methods.includes("stop"), true);
+});
+
+test("runtime timeout stops the owned run and reconciles a terminal stopped state", async () => {
+  let stopRequested = false;
+  const bridge = new FakeBridge({
+    statuses: [{ state: "running" }, { state: "stopped" }],
+    onRequest: (request, reply, current) => {
+      if (request.method === "ping") {
+        reply({ version: 1, requestId: request.requestId, success: true, data: { version: 1, methods: ["ping", "status", "spawn", "interrupt", "stop"] } });
+        return;
+      }
+      if (request.method === "spawn") {
+        reply({ version: 1, requestId: request.requestId, success: true, data: { text: "spawned", details: { runId: "timeout-run" } } });
+        return;
+      }
+      if (request.method === "status") {
+        const state = stopRequested ? "stopped" : "running";
+        reply({ version: 1, requestId: request.requestId, success: true, data: { asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "timeout-run", state }] } } });
+        return;
+      }
+      if (request.method === "stop") stopRequested = true;
+      reply({ version: 1, requestId: request.requestId, success: true, data: { text: request.method } });
+    },
+  });
+
+  await assert.rejects(
+    implementPhase(bridge.pi, "artifact-implementer", "task", "/tmp", { phaseId: "phase-1", runTimeoutMs: 5, pollIntervalMs: 0, completionGraceMs: 0 }),
+    (error: Error) => {
+      assert.match(error.message, /implementation phase timed out after 5ms/);
+      assert.match(error.message, /phase phase-1/);
+      return true;
+    },
+  );
+  assert.equal(bridge.methods.includes("interrupt"), false);
+  assert.equal(bridge.methods.includes("stop"), true);
+});
+
+test("caller cancellation interrupts and reconciles without stopping when interrupt succeeds", async () => {
+  const controller = new AbortController();
+  const bridge = new FakeBridge({ statuses: [{ state: "paused" }], onRequest: (request, reply) => {
+    if (request.method === "spawn") {
+      reply({ version: 1, requestId: request.requestId, success: true, data: { text: "spawned", details: { runId: "cancel-run" } } });
+      queueMicrotask(() => controller.abort());
+      return;
+    }
+    if (request.method === "ping") {
+      reply({ version: 1, requestId: request.requestId, success: true, data: { version: 1, methods: ["ping", "status", "spawn", "interrupt", "stop"] } });
+      return;
+    }
+    if (request.method === "status") {
+      reply({ version: 1, requestId: request.requestId, success: true, data: { asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "cancel-run", state: "paused" }] } } });
+      return;
+    }
+    reply({ version: 1, requestId: request.requestId, success: true, data: { text: request.method } });
+  } });
+
+  await assert.rejects(
+    startResearch(bridge.pi, ["artifact-locator", "artifact-analyzer"], ["a", "b"], "/tmp", { signal: controller.signal }),
+    /Operation aborted/,
+  );
+  assert.equal(bridge.methods.includes("interrupt"), true);
+  assert.equal(bridge.methods.includes("stop"), false);
+});
+
+test("failed caller interrupt falls back to stop", async () => {
+  const controller = new AbortController();
+  const bridge = new FakeBridge({ statuses: [{ state: "stopped" }], onRequest: (request, reply) => {
+    if (request.method === "spawn") {
+      reply({ version: 1, requestId: request.requestId, success: true, data: { text: "spawned", details: { runId: "fallback-run" } } });
+      queueMicrotask(() => controller.abort());
+      return;
+    }
+    if (request.method === "ping") {
+      reply({ version: 1, requestId: request.requestId, success: true, data: { version: 1, methods: ["ping", "status", "spawn", "interrupt", "stop"] } });
+      return;
+    }
+    if (request.method === "interrupt") {
+      reply({ version: 1, requestId: request.requestId, success: false, error: { code: "unsupported", message: "interrupt unsupported" } });
+      return;
+    }
+    if (request.method === "status") {
+      reply({ version: 1, requestId: request.requestId, success: true, data: { asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "fallback-run", state: "stopped" }] } } });
+      return;
+    }
+    reply({ version: 1, requestId: request.requestId, success: true, data: { text: request.method } });
+  } });
+
+  await assert.rejects(
+    startResearch(bridge.pi, ["artifact-locator", "artifact-analyzer"], ["a", "b"], "/tmp", { signal: controller.signal }),
+    /Operation aborted/,
+  );
+  assert.deepEqual(bridge.methods.filter((method) => ["interrupt", "stop"].includes(method)), ["interrupt", "stop"]);
+});
+
+test("receipt persistence failure stops the owned run", async () => {
+  const bridge = statusBridge([{ state: "stopped" }]);
+  await assert.rejects(
+    startResearch(bridge.pi, ["artifact-locator", "artifact-analyzer"], ["a", "b"], "/tmp", {
+      onSpawn: async () => { throw new Error("receipt failed"); },
+      runTimeoutMs: 100,
+      completionGraceMs: 0,
+    }),
+    /receipt failed/,
+  );
+  assert.equal(bridge.methods.includes("stop"), true);
+});
+
+test("rpcCall rejects invalid replies and clears its timeout after success", async () => {
+  const handlers = new Map<string, (data: unknown) => void>();
+  const invalidPi = {
+    events: {
+      on: (channel: string, handler: (data: unknown) => void) => { handlers.set(channel, handler); return () => handlers.delete(channel); },
+      emit: (_channel: string, data: { requestId: string }) => queueMicrotask(() => handlers.get(`subagents:rpc:v1:reply:${data.requestId}`)?.({ invalid: true })),
+    },
+  } as unknown as ExtensionAPI;
+  await assert.rejects(rpcCall(invalidPi, "status", {}, { rpcTimeoutMs: 25 }), /Invalid pi-subagents RPC reply envelope/);
+
+  const success = new FakeBridge();
+  await rpcCall(success.pi, "ping", {}, { rpcTimeoutMs: 100 });
+});
+
+test("implementation settles a delayed spawn reply after abort and cleans up the owned run", async () => {
+  const controller = new AbortController();
+  let childState = "running";
+  let releaseSpawn: (() => void) | undefined;
+  let spawnEmitted: (() => void) | undefined;
+  const emitted = new Promise<void>((resolve) => { spawnEmitted = resolve; });
+  const bridge = new FakeBridge({ onRequest: (request, reply) => {
+    const respond = (data: Record<string, unknown>) => reply({ version: 1, requestId: request.requestId, success: true, data });
+    if (request.method === "ping") return respond(PI_SUBAGENTS_RPC_V1_FIXTURE.ping);
+    if (request.method === "spawn") {
+      releaseSpawn = () => respond({ text: "spawned", details: { runId: "delayed-run" } });
+      spawnEmitted?.();
+      return;
+    }
+    assert.equal(request.params.id, "delayed-run");
+    if (request.method === "interrupt") childState = "paused";
+    if (request.method === "status") return respond({ asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "delayed-run", state: childState }] } });
+    respond({ text: request.method });
+  } });
+  let settled = false;
+  const result = implementPhase(bridge.pi, "artifact-implementer", "task", "/tmp", {
+    signal: controller.signal, rpcTimeoutMs: 1000, runTimeoutMs: 100,
+  });
+  const rejected = assert.rejects(result, { name: "AbortError", message: "Operation aborted" });
+  result.then(() => { settled = true; }, () => { settled = true; });
+  await emitted;
+  controller.abort();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const settledBeforeReply = settled;
+  await rejected;
+  assert.equal(bridge.handlers.size, 1);
+  assert.ok(releaseSpawn);
+  releaseSpawn();
+  assert.equal(settledBeforeReply, true);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(childState, "paused");
+  assert.deepEqual(bridge.methods, ["ping", "spawn", "interrupt", "status"]);
+  assert.equal(bridge.handlers.size, 0);
+});
+
+test("implementation preserves pre-spawn cancellation and spawn RPC timeout classification", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const beforeLaunch = new FakeBridge();
+  await assert.rejects(implementPhase(beforeLaunch.pi, "artifact-implementer", "task", "/tmp", { signal: controller.signal }), { name: "AbortError" });
+  assert.deepEqual(beforeLaunch.methods, []);
+
+  const duringPing = new AbortController();
+  const beforeSpawn = new FakeBridge({ onRequest: (request, reply) => {
+    reply({ version: 1, requestId: request.requestId, success: true, data: PI_SUBAGENTS_RPC_V1_FIXTURE.ping });
+    duringPing.abort();
+  } });
+  await assert.rejects(implementPhase(beforeSpawn.pi, "artifact-implementer", "task", "/tmp", { signal: duringPing.signal }), { name: "AbortError" });
+  assert.deepEqual(beforeSpawn.methods, ["ping"]);
+
+  const timeoutBridge = new FakeBridge({ onRequest: (request, reply) => {
+    if (request.method === "ping") reply({ version: 1, requestId: request.requestId, success: true, data: PI_SUBAGENTS_RPC_V1_FIXTURE.ping });
+  } });
+  await assert.rejects(
+    implementPhase(timeoutBridge.pi, "artifact-implementer", "task", "/tmp", { rpcTimeoutMs: 5, runTimeoutMs: 0 }),
+    { name: "Error", message: "RPC spawn timed out" },
+  );
+  assert.deepEqual(timeoutBridge.methods, ["ping", "spawn"]);
+  assert.equal(timeoutBridge.handlers.size, 0);
+});
+
+test("caller progress normalizes unsafe activity text before truncation", async () => {
+  const controls = Array.from({ length: 32 }, (_, index) => String.fromCharCode(index)).join("")
+    + Array.from({ length: 33 }, (_, index) => String.fromCharCode(127 + index)).join("") + "\u2028\u2029";
+  const bridge = statusBridge([
+    { state: "running", activity: { currentTool: `${controls}bash${controls}read${controls}${"x".repeat(200)}` } },
+    { state: "running", children: [{ state: "running", activity: { currentTool: `${controls}nested${controls}tool` } }] },
+    { state: "running", activity: { currentTool: controls } },
+    { state: "complete" },
+  ]);
+  const labels: Array<string | undefined> = [];
+  await implementPhase(bridge.pi, "artifact-implementer", "task", "/tmp", {
+    pollIntervalMs: 0, completionGraceMs: 0,
+    onProgress: (progress) => { if (progress.state === "running") labels.push(progress.activity?.currentTool); },
+  });
+  assert.deepEqual(labels, [`bash read ${"x".repeat(150)}`, "nested tool", undefined]);
+});
+
+for (const abortAfterTimeout of [false, true]) {
+  test(`late spawn timeout reply is stopped with captured timeout cause (later abort=${abortAfterTimeout})`, async (context) => {
+    context.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+    const controller = new AbortController();
+    let childState = "running";
+    let releaseSpawn: (() => void) | undefined;
+    const bridge = new FakeBridge({ onRequest: (request, reply) => {
+      const respond = (data: Record<string, unknown>) => reply({ version: 1, requestId: request.requestId, success: true, data });
+      if (request.method === "ping") return respond(PI_SUBAGENTS_RPC_V1_FIXTURE.ping);
+      if (request.method === "spawn") {
+        releaseSpawn = () => respond({ text: "spawned", details: { runId: "late-run" } });
+        return;
+      }
+      assert.equal(request.params.id, "late-run");
+      if (request.method === "interrupt") childState = "paused";
+      if (request.method === "stop") childState = "stopped";
+      if (request.method === "status") return respond({ asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "late-run", state: childState }] } });
+      respond({ text: request.method });
+    } });
+    const result = implementPhase(bridge.pi, "artifact-implementer", "task", "/tmp", {
+      rpcTimeoutMs: 5, runTimeoutMs: 100, signal: controller.signal,
+    });
+    const rejected = assert.rejects(result, { message: "RPC spawn timed out" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.ok(releaseSpawn);
+    context.mock.timers.tick(5);
+    await rejected;
+    assert.equal(childState, "running");
+    assert.deepEqual(bridge.methods, ["ping", "spawn"]);
+    assert.equal(bridge.handlers.size, 1);
+    if (abortAfterTimeout) controller.abort();
+    releaseSpawn();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(childState, "stopped");
+    assert.deepEqual(bridge.methods, ["ping", "spawn", "stop", "status"]);
+    assert.equal(bridge.handlers.size, 0);
+  });
+}
+
+test("delayed spawn reply leaves only the emission-anchored window for completion", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  let stopRequested = false;
+  const statusTimes: number[] = [];
+  const bridge = new FakeBridge({ onRequest: (request, reply) => {
+    const respond = (data: Record<string, unknown>) => reply({ version: 1, requestId: request.requestId, success: true, data });
+    if (request.method === "ping") return respond(PI_SUBAGENTS_RPC_V1_FIXTURE.ping);
+    if (request.method === "spawn") {
+      setTimeout(() => respond({ text: "spawned", details: { runId: "delayed-deadline-run" } }), 80);
+      return;
+    }
+    if (request.method === "stop") {
+      stopRequested = true;
+      return respond({ text: "stopped" });
+    }
+    if (request.method === "status") {
+      statusTimes.push(Date.now());
+      if (stopRequested) return respond({ asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "delayed-deadline-run", state: "stopped" }] } });
+      return;
+    }
+  } });
+  const result = implementPhase(bridge.pi, "artifact-implementer", "task", "/tmp", {
+    rpcTimeoutMs: 1_000, runTimeoutMs: 100, pollIntervalMs: 0, completionGraceMs: 0,
+  });
+  const rejected = assert.rejects(result, /implementation phase timed out after 100ms/);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  context.mock.timers.tick(80);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  context.mock.timers.tick(0);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(statusTimes, [80]);
+  context.mock.timers.tick(19);
+  assert.equal(bridge.handlers.size, 2);
+  context.mock.timers.tick(1);
+  await rejected;
+  assert.equal(bridge.methods.includes("stop"), true);
+  assert.equal(bridge.handlers.size, 0);
+});
+
+test("unanswered spawn reply listener expires at the runtime deadline", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const bridge = new FakeBridge({ onRequest: (request, reply) => {
+    if (request.method === "ping") reply({ version: 1, requestId: request.requestId, success: true, data: PI_SUBAGENTS_RPC_V1_FIXTURE.ping });
+  } });
+  const rejected = assert.rejects(implementPhase(bridge.pi, "artifact-implementer", "task", "/tmp", {
+    rpcTimeoutMs: 5, runTimeoutMs: 100,
+  }), { message: "RPC spawn timed out" });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  context.mock.timers.tick(5);
+  await rejected;
+  assert.equal(bridge.handlers.size, 1);
+  context.mock.timers.tick(94);
+  assert.equal(bridge.handlers.size, 1);
+  context.mock.timers.tick(1);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(bridge.handlers.size, 0);
+  assert.deepEqual(bridge.methods, ["ping", "spawn"]);
+});
+test("terminal status just before deadline accepts a completion event within grace after the deadline", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  let settled = false;
+  const bridge = new FakeBridge({ onRequest: (request, reply) => {
+    const respond = (data: Record<string, unknown>) => reply({ version: 1, requestId: request.requestId, success: true, data });
+    if (request.method === "ping") return respond(PI_SUBAGENTS_RPC_V1_FIXTURE.ping);
+    if (request.method === "spawn") return respond({ text: "spawned", details: { runId: "grace-run" } });
+    if (request.method === "status") {
+      setTimeout(() => bridge.emitCompletion({ runId: "grace-run", state: "complete", output: "rich event payload" }), 2);
+      return respond({ asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "grace-run", state: "complete" }] } });
+    }
+    assert.fail(`Unexpected cleanup RPC: ${request.method}`);
+  } });
+
+  const result = implementPhase(bridge.pi, "artifact-implementer", "task", "/tmp", {
+    runTimeoutMs: 100, pollIntervalMs: 99, completionGraceMs: 10,
+  });
+  result.finally(() => { settled = true; }).catch(() => {});
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  context.mock.timers.tick(99);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(bridge.methods, ["ping", "spawn", "status"]);
+  context.mock.timers.tick(1);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  context.mock.timers.tick(1);
+
+  assert.deepEqual(await result, {
+    runId: "grace-run",
+    state: "complete",
+    payload: { runId: "grace-run", state: "complete", output: "rich event payload" },
+  });
+  assert.deepEqual(bridge.methods, ["ping", "spawn", "status"]);
+  assert.equal(bridge.handlers.size, 0);
 });

@@ -9,6 +9,7 @@
 import { mkdir, readFile, rename, writeFile, copyFile, access, stat, realpath, unlink } from "node:fs/promises";
 import { dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { isWithinRoot } from "../paths.ts";
 import {
   type Artifact,
   type ArtifactStatus,
@@ -252,7 +253,7 @@ export function ensureWithin(root: string, candidate: string): string {
 }
 
 /** Resolve an existing managed artifact without following a symlink outside its task. */
-async function resolveManagedArtifactPath(taskDir: string, artifactPath: string): Promise<string> {
+export async function resolveManagedArtifactPath(taskDir: string, artifactPath: string): Promise<string> {
   const canonicalTaskDir = await realpath(taskDir);
   const safePath = safeRelativePath(artifactPath, "artifact.path");
   const lexicalCandidate = resolve(canonicalTaskDir, safePath);
@@ -264,15 +265,10 @@ async function resolveManagedArtifactPath(taskDir: string, artifactPath: string)
     if (isFileMissingError(cause)) throw cause;
     throw new EngineError(`Unsafe artifact path "${artifactPath}": cannot resolve managed file. ${String(cause)}`);
   }
-  if (!isWithinCanonicalRoot(canonicalTaskDir, canonicalCandidate)) {
+  if (!isWithinRoot(canonicalTaskDir, canonicalCandidate)) {
     throw new EngineError(`Unsafe artifact path "${artifactPath}": resolves outside task directory.`);
   }
   return canonicalCandidate;
-}
-
-function isWithinCanonicalRoot(root: string, candidate: string): boolean {
-  const rel = relative(root, candidate);
-  return rel === "" || (!rel.startsWith("..") && !rel.startsWith(sep));
 }
 
 // ---------------------------------------------------------------------------

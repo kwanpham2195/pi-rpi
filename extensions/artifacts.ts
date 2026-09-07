@@ -39,8 +39,9 @@ import {
   suggestTaskActions,
   type TaskManifest,
 } from "../src/engine/index.ts";
+import { resolveManagedArtifactPath } from "../src/engine/engine.ts";
 import { isWithinRoot, resolveArtifactPath } from "../src/paths.ts";
-import { implementPhase, reviewImplementation, startResearch, type ResearchNode } from "../src/agent-runtime.ts";
+import { implementPhase, reviewImplementation, startResearch, type ResearchNode, type RunProgress } from "../src/agent-runtime.ts";
 
 export const DEFAULT_ROOT = `${CONFIG_DIR_NAME}/artifacts`;
 
@@ -287,25 +288,103 @@ function runPayloadText(payload: unknown): string {
 function implementationRunText(phaseId: string, runId: string, state: string, payload: unknown): string {
   const outcome = state === "complete"
     ? `Implementation phase ${phaseId} completed successfully (run ${runId}).`
-    : `Implementation phase ${phaseId} failed with state "${state}" (run ${runId}).`;
+    : state === "partial"
+      ? `Implementation phase ${phaseId} completed partially (run ${runId}).`
+      : `Implementation phase ${phaseId} failed with state "${state}" (run ${runId}).`;
   return `${outcome}\n\n${JSON.stringify(payload)}`;
 }
 
+/** Trusted context used to build one implementation child's complete phase assignment. */
+interface ImplementationPhaseTaskInput {
+  taskSlug: string;
+  taskDir: string;
+  sourceArtifactType: "ticket" | "plan" | "structure-outline";
+  sourceArtifactPath: string;
+  phaseId: string;
+  instruction: string;
+}
+
+/** Build the code-only implementation prompt from validated task state. */
+function buildImplementationPhaseTask(input: ImplementationPhaseTaskInput): string {
+  return [
+    "# RPI implementation phase assignment",
+    "",
+    "The parent extension has already selected and validated this phase. Do not rediscover the task from session history, artifact stores, temp directories, or missions.",
+    `Selected task slug: ${input.taskSlug}`,
+    `Task directory: ${input.taskDir}`,
+    `Authoritative artifact type: ${input.sourceArtifactType}`,
+    `Authoritative artifact path: ${input.sourceArtifactPath}`,
+    `Exact phase ID: ${input.phaseId}`,
+    "",
+    "Caller instruction (supplement only; the authoritative artifact and phase ID above control scope):",
+    input.instruction,
+    "",
+    "Ownership and boundaries:",
+    "- Implement the requested code and tests in the repository checkout.",
+    "- Read the authoritative artifact at the exact path above, then only the source files and dependencies required by this phase.",
+    "- This is code-only work. Do not create, update, approve, supersede, or otherwise mutate RPI task artifacts.",
+    "- Do not wait for a human gate, mark the phase complete, commit, or record a phase receipt. The parent owns those actions.",
+    "- Use contact_supervisor only for a real plan/code conflict that cannot be resolved from the authoritative artifact.",
+    "",
+    "Required final evidence:",
+    "- changed files",
+    "- exact focused automated commands and their results",
+    "- residual risks or omitted checks",
+    "- manual checks the parent must perform",
+    "End with: ready for parent verification.",
+  ].join("\n");
+}
+
+function resolveImplementationPhase(sourceType: "ticket" | "plan" | "structure-outline", source: string, requestedPhaseId: string): string {
+  if (sourceType === "ticket") {
+    if (requestedPhaseId.trim() !== "implementation") throw new Error('Oneshot ticket implementation must use phase ID "implementation".');
+    return "implementation";
+  }
+  const headings = [...source.matchAll(/^##\s+(?:✅\s+)?(Phase\s+\d+(?::[^\r\n]*)?)\s*$/gim)].map((match) => match[1]!.trim());
+  const requested = requestedPhaseId.trim();
+  const matches = headings.filter((heading) => heading === requested);
+  if (matches.length !== 1) throw new Error(`Implementation phase "${requestedPhaseId}" must match exactly one phase heading in the authoritative artifact.`);
+  return matches[0]!;
+}
+
 type AgentRunOperation = "research" | "implementation" | "review";
-type AgentRunProgressDetails = { operation: AgentRunOperation; runId: string; state: string; pollCount: number; phaseId?: string };
+type AgentRunProgressDetails = {
+  operation: AgentRunOperation;
+  runId: string;
+  state: string;
+  pollCount: number;
+  phaseId?: string;
+  currentTool?: string;
+  turnCount?: number;
+  toolCount?: number;
+};
 
 function emitAgentRunProgress(
   onUpdate: AgentToolUpdateCallback<AgentRunProgressDetails> | undefined,
   operation: AgentRunOperation,
-  runId: string,
-  state: string,
-  pollCount: number,
+  progress: RunProgress,
   phaseId?: string,
 ): void {
   const phase = phaseId ? ` phase ${phaseId}` : "";
+  const activity = progress.activity;
+  const activityParts = [
+    activity?.currentTool,
+    activity?.turnCount === undefined ? undefined : `${activity.turnCount} turns`,
+    activity?.toolCount === undefined ? undefined : `${activity.toolCount} tools`,
+  ].filter((part): part is string => part !== undefined);
+  const activityText = activityParts.length > 0 ? ` · ${activityParts.join(" · ")}` : ` (poll ${progress.pollCount})`;
   onUpdate?.({
-    content: [{ type: "text", text: `${operation}${phase} run ${runId}: ${state} (poll ${pollCount}).` }],
-    details: { operation, runId, state, pollCount, ...(phaseId ? { phaseId } : {}) },
+    content: [{ type: "text", text: `${operation}${phase} run ${progress.runId}: ${progress.state}${activityText}.` }],
+    details: {
+      operation,
+      runId: progress.runId,
+      state: progress.state,
+      pollCount: progress.pollCount,
+      ...(phaseId ? { phaseId } : {}),
+      ...(activity?.currentTool !== undefined ? { currentTool: activity.currentTool } : {}),
+      ...(activity?.turnCount !== undefined ? { turnCount: activity.turnCount } : {}),
+      ...(activity?.toolCount !== undefined ? { toolCount: activity.toolCount } : {}),
+    },
   });
 }
 
@@ -316,14 +395,27 @@ function renderAgentRunResult(
   theme: Theme,
   context: { isError: boolean },
 ): Text {
-  const details = result.details as { runId?: unknown; state?: unknown; phaseId?: unknown } | undefined;
+  const details = result.details as { runId?: unknown; state?: unknown; phaseId?: unknown; currentTool?: unknown; turnCount?: unknown; toolCount?: unknown } | undefined;
   const text = result.content.find((block) => block.type === "text")?.text ?? "Agent run failed without an error message.";
-  if (context.isError) return new Text(theme.fg("error", `${operation} failed: ${text}`), 0, 0);
   const runId = typeof details?.runId === "string" ? details.runId : "unknown";
   const state = typeof details?.state === "string" ? details.state : "running";
   const phase = typeof details?.phaseId === "string" ? ` phase ${details.phaseId}` : "";
   const label = `${operation}${phase} run ${runId}`;
-  if (isPartial) return new Text(theme.fg("warning", `${label}: ${state}`), 0, 0);
+  if (state === "partial") {
+    const outcome = theme.fg("warning", `${label}: completed partially`);
+    if (!expanded) return new Text(outcome, 0, 0);
+    return new Text(`${outcome}\n${text}`, 0, 0);
+  }
+  if (context.isError) return new Text(theme.fg("error", `${operation} failed: ${text}`), 0, 0);
+  if (isPartial) {
+    const activityParts = [
+      typeof details?.currentTool === "string" ? details.currentTool : undefined,
+      typeof details?.turnCount === "number" ? `${details.turnCount} turns` : undefined,
+      typeof details?.toolCount === "number" ? `${details.toolCount} tools` : undefined,
+    ].filter((part): part is string => part !== undefined);
+    const activityText = activityParts.length > 0 ? ` · ${activityParts.join(" · ")}` : "";
+    return new Text(theme.fg("warning", `${label}: ${state}${activityText}`), 0, 0);
+  }
   const outcome = state === "complete" ? theme.fg("success", `${label}: complete`) : theme.fg("error", `${label}: ${state}`);
   if (!expanded) return new Text(outcome, 0, 0);
   return new Text(`${outcome}\n${text}`, 0, 0);
@@ -670,7 +762,7 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
       const nodes = requireResearchNodes(params.nodes);
       const receipt = await startResearch(pi, nodes, params.tasks, ctx.cwd, { signal, onSpawn: async (runId) => {
         await withTaskMutationQueue(active.taskDir, () => recordTaskRun(active.taskDir, runId, "research fanout"));
-      }, onProgress: ({ runId, state, pollCount }) => emitAgentRunProgress(onUpdate, "research", runId, state, pollCount) });
+      }, onProgress: (progress) => emitAgentRunProgress(onUpdate, "research", progress) });
       const output = await boundedToolText(`Research fanout run ${receipt.runId} ${receipt.state} across ${params.nodes.length} nodes.\n\n${runPayloadText(receipt.payload)}`);
       return {
         content: [{ type: "text" as const, text: output.text }],
@@ -686,27 +778,50 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
     name: "rpi_implement_phase",
     label: "RPI Implement Phase",
     description:
-      "Launch a single implementer agent (artifact-implementer or artifact-outline-implementer) for exactly one phase of the active task. The parent verifies automated checks afterwards and gates on the human.",
+      "Launch a single implementer agent for exactly one canonical phase of the active task. Plan/outline phases use the exact heading; oneshot ticket phases use implementation. The parent verifies automated checks afterwards and gates on the human.",
     promptSnippet: "rpi_implement_phase — run one implementation phase",
     promptGuidelines: [
       "Use rpi_implement_phase for exactly one phase at a time with a single writer; run automated checks after and present the manual-verification gate.",
     ],
     parameters: Type.Object({
-      phaseId: Type.String({ description: "Phase id from the plan/structure outline" }),
+      phaseId: Type.String({ maxLength: 200, description: "Exact Phase N: title heading text without leading ## or a completion marker, or implementation for an approved oneshot ticket" }),
       agent: StringEnum(["artifact-implementer", "artifact-outline-implementer"] as const),
-      phaseTask: Type.String({ description: "Task text describing the phase to implement" }),
+      phaseTask: Type.String({ maxLength: 4_000, description: "Task text describing the phase to implement" }),
       timeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum implementation phase duration in milliseconds (default 900000)" })),
+      model: Type.Optional(Type.String({ maxLength: 200, description: "Optional implementation child model override" })),
     }),
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const active = await currentTask(pi, ctx);
       if (!active) throw new Error("No task selected. First call rpi_get_task_context.");
-      const receipt = await implementPhase(pi, params.agent, params.phaseTask, ctx.cwd, { signal, timeoutMs: params.timeoutMs, phaseId: params.phaseId, onSpawn: async (runId) => {
-        await withTaskMutationQueue(active.taskDir, () => recordTaskRun(active.taskDir, runId, `implementation phase ${params.phaseId}`));
-      }, onProgress: ({ runId, state, pollCount }) => emitAgentRunProgress(onUpdate, "implementation", runId, state, pollCount, params.phaseId) });
-      const output = await boundedToolText(implementationRunText(params.phaseId, receipt.runId, receipt.state, receipt.payload));
+      const manifest = await loadManifest(active.taskDir);
+      const sourceArtifactType: ImplementationPhaseTaskInput["sourceArtifactType"] = params.agent === "artifact-implementer"
+        ? manifest.flow === "oneshot" ? "ticket" : "plan"
+        : "structure-outline";
+      const sourceArtifact = findArtifact(manifest, sourceArtifactType);
+      if (!sourceArtifact || sourceArtifact.status === "superseded") {
+        throw new Error(`Implementation phase requires an active ${sourceArtifactType} artifact.`);
+      }
+      if (sourceArtifact.status !== "approved") {
+        throw new Error(`Implementation phase requires an approved ${sourceArtifactType} artifact; current status is "${sourceArtifact.status}".`);
+      }
+      const sourceArtifactPath = await resolveManagedArtifactPath(active.taskDir, sourceArtifact.path);
+      const sourceContent = await readFile(sourceArtifactPath, "utf8");
+      const canonicalPhaseId = resolveImplementationPhase(sourceArtifactType, sourceContent, params.phaseId);
+      const implementationTask = buildImplementationPhaseTask({
+        taskSlug: manifest.slug,
+        taskDir: active.taskDir,
+        sourceArtifactType,
+        sourceArtifactPath,
+        phaseId: canonicalPhaseId,
+        instruction: params.phaseTask,
+      });
+      const receipt = await implementPhase(pi, params.agent, implementationTask, ctx.cwd, { signal, runTimeoutMs: params.timeoutMs, model: params.model, phaseId: canonicalPhaseId, onSpawn: async (runId) => {
+        await withTaskMutationQueue(active.taskDir, () => recordTaskRun(active.taskDir, runId, `implementation phase ${canonicalPhaseId}`));
+      }, onProgress: (progress) => emitAgentRunProgress(onUpdate, "implementation", progress, canonicalPhaseId) });
+      const output = await boundedToolText(implementationRunText(canonicalPhaseId, receipt.runId, receipt.state, receipt.payload));
       return {
         content: [{ type: "text" as const, text: output.text }],
-        details: { runId: receipt.runId, state: receipt.state, phaseId: params.phaseId, ...(output.fullOutputPath ? { fullOutputPath: output.fullOutputPath } : {}) },
+        details: { runId: receipt.runId, state: receipt.state, phaseId: canonicalPhaseId, ...(output.fullOutputPath ? { fullOutputPath: output.fullOutputPath } : {}) },
       };
     },
     renderResult(result, options, theme, context) {
@@ -731,7 +846,7 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
       if (!active) throw new Error("No task selected. First call rpi_get_task_context.");
       const receipt = await reviewImplementation(pi, params.reviewTask, ctx.cwd, { signal, onSpawn: async (runId) => {
         await withTaskMutationQueue(active.taskDir, () => recordTaskRun(active.taskDir, runId, "implementation review"));
-      }, onProgress: ({ runId, state, pollCount }) => emitAgentRunProgress(onUpdate, "review", runId, state, pollCount) });
+      }, onProgress: (progress) => emitAgentRunProgress(onUpdate, "review", progress) });
       const output = await boundedToolText(`Implementation review run ${receipt.runId} ${receipt.state}.\n\n${runPayloadText(receipt.payload)}`);
       return {
         content: [{ type: "text" as const, text: output.text }],

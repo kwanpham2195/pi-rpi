@@ -124,6 +124,8 @@ const INTENTIONALLY_PI_ADAPTED_ASSET_PATHS = new Set([
   "skills/describe-pr/references/describe_pr_final_answer.md",
   "skills/describe-pr/references/pr_description_template.md",
   "skills/describe-pr/references/show-me.md",
+  "skills/create-plan/references/plan_template.md",
+  "skills/create-structure-outline/references/structure_outline_template.md",
 ]);
 
 
