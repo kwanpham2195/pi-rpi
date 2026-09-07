@@ -151,7 +151,7 @@ test("RPC v1 fixture supplies spawn, running progress, and completion with the d
     omitted: { runs: 0, children: 0, byteLimitExceeded: false },
     runs: [{ id: "fixture-run", kind: "subagent", label: "artifact-implementer", state: "running", activity: { currentTool: "bash", turnCount: 1, toolCount: 2 } }],
   });
-  assert.equal(bridge.captured.find((request) => request.method === "spawn")?.params.timeoutMs, 900_000);
+  assert.equal(bridge.captured.find((request) => request.method === "spawn")?.params.timeoutMs, 1_200_000);
   assert.equal(bridge.handlers.size, 0);
 });
 
@@ -270,6 +270,23 @@ test("startResearch keeps workflowScript and passes the runtime timeout at the w
   assert.match(String(spawn.params.workflowScript), /artifact-analyzer/);
 });
 
+test("startResearch uses the default research timeout at the workflow root", async () => {
+  const bridge = statusBridge([{ state: "complete" }]);
+
+  await startResearch(
+    bridge.pi,
+    ["artifact-locator", "artifact-analyzer"],
+    ["find files", "analyze files"],
+    "/tmp/x",
+    { pollIntervalMs: 1, completionGraceMs: 0 },
+  );
+
+  const spawn = bridge.captured[1];
+  assert.ok(spawn);
+  assert.equal(spawn.method, "spawn");
+  assert.equal(spawn.params.timeoutMs, 600_000);
+});
+
 test("implementation and review use direct async child requests", async () => {
   const bridge = statusBridge([{ state: "complete" }, { state: "complete" }], ["implementation-run", "review-run"]);
   const implementation = await implementPhase(bridge.pi, "artifact-implementer", "authoritative task", "/tmp/project", {
@@ -299,7 +316,7 @@ test("implementation and review use direct async child requests", async () => {
     context: "fresh",
     cwd: "/tmp/project",
     async: true,
-    timeoutMs: 240_000,
+    timeoutMs: 600_000,
   });
   assert.equal("workflowScript" in (spawns[0]?.params ?? {}), false);
   assert.equal("workflowScript" in (spawns[1]?.params ?? {}), false);

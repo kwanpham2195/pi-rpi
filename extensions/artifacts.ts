@@ -787,7 +787,7 @@ export default function artifactsExtension(pi: ExtensionAPI): void {
       phaseId: Type.String({ maxLength: 200, description: "Exact Phase N: title heading text without leading ## or a completion marker, or implementation for an approved oneshot ticket" }),
       agent: StringEnum(["artifact-implementer", "artifact-outline-implementer"] as const),
       phaseTask: Type.String({ maxLength: 4_000, description: "Task text describing the phase to implement" }),
-      timeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum implementation phase duration in milliseconds (default 900000)" })),
+      timeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum implementation phase duration in milliseconds (default 1200000)" })),
       model: Type.Optional(Type.String({ maxLength: 200, description: "Optional implementation child model override" })),
     }),
     async execute(_toolCallId, params, signal, onUpdate, ctx) {

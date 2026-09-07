@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Increased research and review agent-run defaults to 10 minutes and implementation defaults to 20 minutes.
 - Corrected pi-subagents implementation and review launches to use direct child runs with authoritative task context, owned timeout cleanup, and live activity progress.
 - Replaced stale HumanLayer paths and links in packaged skill templates with Pi artifact and workspace references.
 - Cleared unavailable persisted task selections before they can inject agent context or run task tools.
