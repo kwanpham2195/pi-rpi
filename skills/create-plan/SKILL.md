@@ -25,14 +25,16 @@ Convert the available structure outline into a complete implementation plan with
    - Test additions or updates that follow patterns documented by research.
    - Success Criteria with runnable Automated Verification commands and expected results.
    - Manual Verification only where automation cannot prove behavior. Make each step specific and actionable; when present, state that implementation pauses after automated verification for user confirmation.
-5. Keep the Implementation Overview checkbox list so implementation can resume at the first unchecked phase. Do not mark a phase complete while writing the plan.
-6. Preserve the outline's sequencing, independence, and scope. Do not add unresearched work or remove an intentional outline phase.
-7. In RPI mode, create `plan` with `rpi_create_artifact`, description `<topic>`, and `dependsOn: ["structure-outline"]`; use `rpi_update_artifact` for later changes. In generic mode, deliver the completed plan in chat or write it to the explicitly named path.
+5. Apply the template's phase-size, verification-ownership, authoritative-surface, and heading/`phaseId` contract to every phase. Split unrelated behaviors or broad verification groups; keep tests with the behavior they prove.
+6. Keep the Implementation Overview checkbox list so implementation can resume at the first unchecked phase. Do not mark a phase complete while writing the plan.
+7. Preserve the outline's sequencing, independence, and scope. Do not add unresearched work or remove an intentional outline phase.
+8. In RPI mode, create `plan` with `rpi_create_artifact`, description `<topic>`, and `dependsOn: ["structure-outline"]`; use `rpi_update_artifact` for later changes. In generic mode, deliver the completed plan in chat or write it to the explicitly user-named path.
 
 ## Quality Bar
 
 - The plan is detailed enough that an implementer can make each exact change without rediscovering the architecture.
 - Every claimed test command is runnable in the target repository and has an expected result.
+- Every phase names one observable behavior, its authoritative code surfaces, focused proof, and verification ownership.
 - Test code follows the existing tested pattern when research found one.
 - Manual verification appears only when necessary, never as filler.
 - When documents conflict, this plan supersedes its inputs.

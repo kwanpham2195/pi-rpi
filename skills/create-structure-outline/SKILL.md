@@ -19,14 +19,15 @@ Turn decisions into thin, vertical, independently verifiable implementation slic
 2. When real layout evidence is needed, run a foreground read-only research pass. In RPI mode, use `rpi_start_research` with 2-6 `artifact-locator`, `artifact-analyzer`, or `artifact-pattern-finder` nodes. In generic mode, use available foreground read-only research or analysis tools. Do not draft from unverified assumptions.
 3. Load `references/show-me.md` for visual conventions and `references/structure_outline_template.md` for the canonical document shape.
 4. Write phases as thin vertical slices that cross module boundaries. Each phase must be independently verifiable, may not be horizontal work such as all migrations or all UI, and may not depend on a later phase.
-5. For every phase, lead with the smallest useful visual view:
+5. Apply the template's phase-size, verification-ownership, authoritative-surface, and heading/`phaseId` contract to every phase. Split unrelated behaviors or broad verification groups; keep tests with the behavior they prove.
+6. For every phase, lead with the smallest useful visual view:
    - Use a file-change tree (`├──`, `└──`, `│`) when file ownership matters.
    - Use a `diff` block for an existing data structure, schema, or API contract; use a plain code block for a complete new or mostly new target shape.
    - Include test-file changes in the same view when research found a test pattern.
    - Explain why the shape matters, then close with runnable Automated Verification and specific Manual Verification only where a person must check behavior.
-6. Add the Implementation Overview checkbox list near the top (`- [ ] Phase N: <Title>`), Desired End State, and Open Questions when questions remain.
-7. For later user corrections, verify named sources before changing paths, file views, or validation instructions. In RPI mode, use `rpi_update_artifact`; in generic mode, revise the delivered document or explicitly named file rather than adding a change log.
-8. In RPI mode, create `structure-outline` with `rpi_create_artifact`, description `<topic>`, and the active flow's approved design dependency. In generic mode, deliver the completed outline in chat or write it to the explicitly named path.
+7. Add the Implementation Overview checkbox list near the top (`- [ ] Phase N: <Title>`), Desired End State, and Open Questions when questions remain.
+8. For later user corrections, verify named sources before changing paths, file views, or validation instructions. In RPI mode, use `rpi_update_artifact`; in generic mode, revise the delivered document or explicitly named file rather than adding a change log.
+9. In RPI mode, create `structure-outline` with `rpi_create_artifact`, description `<topic>`, and the active flow's approved design dependency. In generic mode, deliver the completed outline in chat or write it to the explicitly named path.
 
 ## Final Response
 

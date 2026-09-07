@@ -21,11 +21,23 @@ sha: [result of git rev-parse HEAD]
 - [ ] Phase 2: [Phase Title]
 - [ ] ...
 
+## Phase heading convention
+
+Write every source heading as `## Phase N: title`. Callers use the heading text `Phase N: title` as `phaseId`, without the leading Markdown `##` or any completion marker. Oneshot ticket callers use `implementation`.
+
 ---
 
 ## Phase 1: [Phase Title]
 
 [Overview of what this phase accomplishes]
+
+### Phase Size and Verification Ownership
+
+- **One observable behavior:** [the single behavior this phase proves]
+- **Authoritative files/code surfaces:** [exact paths or symbols]
+- **Focused automated verification:** [commands and expected results]
+- **Full repository gate:** [required here / intentionally deferred until final handoff, with reason]
+- **Ownership:** The child runs and fixes focused checks; the parent runs omitted checks, presents the human gate, updates artifacts, commits, and records the receipt.
 
 ### Change Outline
 
@@ -63,7 +75,7 @@ interface RecordSummary {
  records
    id                 uuid primary key
 +  status             text not null       + new lifecycle state
-+  organization_id    uuid not null        ~ included in the lookup index
++  organization_id    uuid not null       ~ included in the lookup index
 -  legacy_flag        boolean
 ```
 
@@ -96,6 +108,13 @@ interface RecordSummary {
 ## Phase 2: [Phase Title]
 
 ...
+
+### Phase Size and Verification Ownership
+- **One observable behavior:** [the single behavior this phase proves]
+- **Authoritative files/code surfaces:** [exact paths or symbols]
+- **Focused automated verification:** [commands and expected results]
+- **Full repository gate:** [required here / intentionally deferred until final handoff, with reason]
+- **Ownership:** The child runs and fixes focused checks; the parent runs omitted checks, presents the human gate, updates artifacts, commits, and records the receipt.
 
 ---
 

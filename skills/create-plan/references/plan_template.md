@@ -33,12 +33,23 @@ sha: [result of git rev-parse HEAD]
 
 [High-level strategy and reasoning]
 
+## Phase heading convention
+
+Write every source heading as `## Phase N: title`. Callers use the heading text `Phase N: title` as `phaseId`, without the leading Markdown `##` or any completion marker. Oneshot ticket callers use `implementation`.
+
 ---
 
 ## Phase 1: [Descriptive Name]
 
 ### Overview
+
 [What this phase accomplishes]
+### Phase Size and Verification Ownership
+- **One observable behavior:** [the single behavior this phase proves]
+- **Authoritative files/code surfaces:** [exact paths or symbols]
+- **Focused automated verification:** [commands and expected results]
+- **Full repository gate:** [required here / intentionally deferred until final handoff, with reason]
+- **Ownership:** The child runs and fixes focused checks; the parent runs omitted checks, presents the human gate, updates artifacts, commits, and records the receipt.
 
 ### Changes Required:
 
@@ -92,7 +103,14 @@ export interface [name]{
 ## Phase 2: [Descriptive Name]
 
 ### Overview
+
 [What this phase accomplishes]
+### Phase Size and Verification Ownership
+- **One observable behavior:** [the single behavior this phase proves]
+- **Authoritative files/code surfaces:** [exact paths or symbols]
+- **Focused automated verification:** [commands and expected results]
+- **Full repository gate:** [required here / intentionally deferred until final handoff, with reason]
+- **Ownership:** The child runs and fixes focused checks; the parent runs omitted checks, presents the human gate, updates artifacts, commits, and records the receipt.
 
 ### Changes Required:
 
