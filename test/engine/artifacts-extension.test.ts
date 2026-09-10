@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, realpath, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -1250,6 +1250,71 @@ test("research and review tools forward queued and running updates", async () =>
         { operation: scenario.operation, runId: scenario.runId, state: "running", pollCount: 1 },
       ]);
     }
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+});
+
+test("public RPI tools share artifacts and filesystem locking through a real worktree link", async () => {
+  const project = await tempProject();
+  const worktree = join(project, "worktree");
+  const artifactRoot = join(project, ".pi", "artifacts");
+  try {
+    await runGit(project, ["init", "-q"]);
+    await runGit(project, ["config", "user.name", "RPI Test"]);
+    await runGit(project, ["config", "user.email", "rpi-test@example.com"]);
+    await writeFile(join(project, "README.md"), "fixture\n", "utf8");
+    await runGit(project, ["add", "README.md"]);
+    await runGit(project, ["commit", "-q", "-m", "fixture"]);
+    await runGit(project, ["worktree", "add", "-q", "-b", "shared-artifacts", worktree, "HEAD"]);
+
+    await createTask(artifactRoot, {
+      slug: "shared-task",
+      title: "Shared task",
+      flow: "rpi",
+      baseBranch: "main",
+      ticketBody: "# Original ticket\n",
+    });
+    await mkdir(join(worktree, ".pi"));
+    await symlink(await realpath(artifactRoot), join(worktree, ".pi", "artifacts"));
+
+    const original = fakeExtensionApi();
+    const alias = fakeExtensionApi();
+    await invoke(original.tools.get("rpi_get_task_context")!, { slug: "shared-task" }, original.context(project));
+    await invoke(alias.tools.get("rpi_get_task_context")!, { slug: "shared-task" }, alias.context(worktree));
+
+    const taskDirectory = join(artifactRoot, "shared-task");
+    const lockPath = join(taskDirectory, ".artifact-manifest.lock");
+    await writeFile(lockPath, JSON.stringify({ owner: "test", pid: process.pid, createdAt: Date.now() }), "utf8");
+    let completed = false;
+    const createThroughAlias = invoke(alias.tools.get("rpi_create_artifact")!, {
+      type: "research-questions",
+      description: "shared lock",
+      content: "Created through worktree",
+      dependsOn: [],
+    }, alias.context(worktree)).then((result) => {
+      completed = true;
+      return result;
+    });
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+    assert.equal(completed, false, "the worktree alias must wait on the original task lock");
+    await unlink(lockPath);
+    await createThroughAlias;
+
+    const readFromOriginal = await invoke(original.tools.get("rpi_read_artifact")!, {
+      artifactId: "research-questions",
+    }, original.context(project)) as { content: Array<{ text: string }> };
+    assert.match(readFromOriginal.content[0]!.text, /Created through worktree/);
+
+    await invoke(original.tools.get("rpi_update_artifact")!, {
+      artifactId: "research-questions",
+      content: "Updated through original checkout",
+    }, original.context(project));
+    const readFromAlias = await invoke(alias.tools.get("rpi_read_artifact")!, {
+      artifactId: "research-questions",
+    }, alias.context(worktree)) as { content: Array<{ text: string }> };
+    assert.match(readFromAlias.content[0]!.text, /Updated through original checkout/);
+    assert.equal((await loadManifest(taskDirectory)).artifacts.length, 2);
   } finally {
     await rm(project, { recursive: true, force: true });
   }

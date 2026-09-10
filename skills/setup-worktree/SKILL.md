@@ -7,7 +7,7 @@ description: "Only use when the user explicitly invokes this skill by name."
 
 Create isolated Git worktrees for the active Pi task from the configured workspace files. Do not create a worktree from inside another worktree unless the user explicitly insists.
 
-Task documents are managed under `.pi/artifacts/<task-slug>/`. Select and read them through the existing `rpi_*` artifact tools; never create, copy, edit, stage, or commit the artifact root as part of workspace setup.
+Task documents are managed under `.pi/artifacts/<task-slug>/`. Select and read them through the existing `rpi_*` artifact tools. Workspace setup shares the authoritative artifact root only through the explicit link in Step 3; never copy, edit, stage, or commit it.
 
 ## Workspace configuration
 
@@ -94,22 +94,24 @@ Only when neither workspace configuration file exists:
 1. Parse both configuration files and compute effective settings. Validate that every configured repository exists and is a Git repository, each `sourceRef` resolves to a commit, and a multi-repository configuration has exactly one primary repository.
 2. For each repository, resolve `REPOBASENAME` from its repository root, render the path and branch templates, and expand `~` before use.
 3. Before creating a worktree, verify that the destination path and branch do not already exist. Do not overwrite, remove, reuse, or guess around either collision; report it and wait for explicit user direction.
-4. Create the worktree with:
+4. Resolve the one authoritative artifact root from the checkout containing the selected task. Require its `.pi/artifacts` to exist as a directory, and resolve it to an absolute canonical path. Every repository worktree links to this same root; secondary repositories do not supply independent artifact roots.
+5. Create the worktree with:
 
    ```sh
    git worktree add -b <rendered-branch> <rendered-worktree-path> <source-ref>
    ```
 
-5. Copy existing files matched by the effective `copyGlobs` from the repository root to its worktree, preserving their relative paths. A glob with no match is not an error. Never copy `.pi/artifacts/`, even if a broad or invalid glob would match it; report and refuse that configuration entry instead.
-6. When `setupCommand` is non-empty, run it in the new worktree. Report its command, directory, and result. Stop on failure; do not claim the workspace is ready.
-7. Continue until every configured worktree has been created, copied, and set up. If any creation, copy, or setup step fails, report the exact failing repository, command, and error, then work with the user to resolve it. Do not output the success response below after a failure.
+6. In each new worktree, inspect `.pi` without following symlinks. Create it when absent. If it exists as a symlink or is not a directory, stop without changing it. Then inspect `.pi/artifacts` without following symlinks. If any file, directory, symlink, or dangling symlink already occupies that path, stop without changing it. Otherwise create `.pi/artifacts` as a symlink to the authoritative absolute artifact root.
+7. Copy existing files matched by the effective `copyGlobs` from the repository root to its worktree, preserving their relative paths. A glob with no match is not an error. Never copy `.pi/artifacts/`, even if a broad or invalid glob would match it; report and refuse that configuration entry instead. The link created in the preceding step is the only workspace-setup exception for the artifact root.
+8. When `setupCommand` is non-empty, run it in the new worktree. Report its command, directory, and result. Stop on failure; do not claim the workspace is ready.
+9. Continue until every configured worktree has been created, linked, copied, and set up. If any creation, link, copy, or setup step fails, report the exact failing repository, command, and error, then work with the user to resolve it. Do not output the success response below after a failure.
 
 ## Successful completion response
 
 Only after every worktree exists and all setup commands have succeeded, report:
 
 - Task slug and rendered branch name for each repository.
-- Every worktree path, its primary/non-primary role, copied-file result, and setup-command result.
+- Every worktree path, its primary/non-primary role, authoritative artifact-root link, copied-file result, and setup-command result.
 - The shared and local workspace config paths that controlled the result.
 - The primary worktree path where implementation should start. Start Pi from that directory, select the task if needed, and use `implement-plan` when a plan exists or `implement-outline` when it does not.
-- That `.pi/artifacts/` was not copied, staged, or committed.
+- That `.pi/artifacts/` was linked to the original authoritative root, not copied, staged, or committed. Start a new Pi session in the primary worktree and select the same task with `/rpi-task <task-slug>`.
