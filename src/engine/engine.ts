@@ -1137,9 +1137,11 @@ export function resolvePrecedence(manifest: TaskManifest, fromType: ArtifactType
 
 export async function changeFlow(manifest: TaskManifest, flow: Flow, taskDir?: string): Promise<TaskManifest> {
   const mutate = async (freshManifest: TaskManifest): Promise<TaskManifest> => {
-    // Ticket is task input; mockup and diagram are supporting material, not flow-spine blockers.
+    // Ticket is task input; auxiliary artifacts are supporting material, not flow-spine blockers.
     const nowDisabled = freshManifest.artifacts.filter(
-      (artifact) => !["ticket", "mockup", "diagram"].includes(artifact.type) && !isTypeEnabled(flow, artifact.type),
+      (artifact) => artifact.status !== "superseded"
+        && !["ticket", "mockup", "diagram", "pr-walkthrough"].includes(artifact.type)
+        && !isTypeEnabled(flow, artifact.type),
     );
     if (nowDisabled.length > 0) {
       throw new EngineError(

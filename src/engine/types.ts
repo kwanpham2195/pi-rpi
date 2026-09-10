@@ -6,8 +6,8 @@
  * with two documented refinements from review:
  * - `plan` is the newest member of rpi/prd precedence (skills and README state
  *   `plan > outline > ...`).
- * - `mockup` and `diagram` are AUXILIARY supporting artifacts allowed in
- *   rpi/prd/oneshot (create-prd/create-tdd produce them) even though the plan's
+ * - `mockup`, `diagram`, and `pr-walkthrough` are AUXILIARY supporting artifacts
+ *   allowed in rpi/prd/oneshot even though the plan's
  *   chains list only the document spine. `ticket` is created by `createTask`,
  *   not via a flow chain, so it is not listed in the rpi/prd chains.
  */
@@ -96,7 +96,7 @@ export const ARTIFACT_TYPES: ArtifactType[] = [
 
 /**
  * Flow chains: enabled artifact types. `plan` is optional on top of outline in
- * rpi/prd; `mockup`/`diagram` are auxiliary supporting artifacts.
+ * rpi/prd; `mockup`/`diagram`/`pr-walkthrough` are auxiliary supporting artifacts.
  */
 export const FLOW_CHAINS: Record<Flow, ArtifactType[]> = {
   rpi: [
@@ -109,6 +109,7 @@ export const FLOW_CHAINS: Record<Flow, ArtifactType[]> = {
     "pr-description",
     "mockup", // auxiliary
     "diagram", // auxiliary
+    "pr-walkthrough", // auxiliary
   ],
   prd: [
     "research-questions",
@@ -121,8 +122,9 @@ export const FLOW_CHAINS: Record<Flow, ArtifactType[]> = {
     "pr-description",
     "mockup", // auxiliary
     "diagram", // auxiliary
+    "pr-walkthrough", // auxiliary
   ],
-  oneshot: ["ticket", "implementation", "pr-description", "mockup", "diagram"],
+  oneshot: ["ticket", "implementation", "pr-description", "mockup", "diagram", "pr-walkthrough"],
   freeform: [...ARTIFACT_TYPES],
 };
 

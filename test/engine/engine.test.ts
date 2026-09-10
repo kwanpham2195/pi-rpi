@@ -622,6 +622,52 @@ test("supersession accepts only the active approved artifact of the same type", 
   await rm(base, { recursive: true, force: true });
 });
 
+test("changeFlow ignores superseded history but blocks active incompatible artifacts", async () => {
+  const base = await mkTmp();
+  await createTask(base, { slug: "flow-history", title: "Flow", flow: "freeform", baseBranch: "main" });
+  const taskDir = join(base, "flow-history");
+  await createArtifact(taskDir, { type: "design-discussion", description: "design", content: "d1", dependsOn: [] });
+  let manifest = await loadManifest(taskDir);
+  await setArtifactStatus(manifest, "design-discussion", "in-review", taskDir);
+  manifest = await setArtifactStatus(manifest, "design-discussion", "approved", taskDir);
+  await createArtifact(taskDir, {
+    type: "design-discussion",
+    description: "replacement",
+    content: "d2",
+    dependsOn: [],
+    supersedes: "design-discussion",
+  });
+  await changeFlow(await loadManifest(taskDir), "rpi", taskDir);
+
+  await assert.rejects(changeFlow(await loadManifest(taskDir), "prd", taskDir), /design-discussion-v2/);
+  manifest = await loadManifest(taskDir);
+  await setArtifactStatus(manifest, "design-discussion-v2", "in-review", taskDir);
+  manifest = await setArtifactStatus(manifest, "design-discussion-v2", "approved", taskDir);
+  await setArtifactStatus(manifest, "design-discussion-v2", "superseded", taskDir);
+  assert.equal((await changeFlow(await loadManifest(taskDir), "prd", taskDir)).flow, "prd");
+  await rm(base, { recursive: true, force: true });
+});
+
+test("pr-walkthrough accepts implementation input and remains supporting material across flows", async () => {
+  const base = await mkTmp();
+  await createTask(base, { slug: "flow-walkthrough", title: "Flow", flow: "oneshot", baseBranch: "main", ticketBody: "ticket" });
+  const taskDir = join(base, "flow-walkthrough");
+  let manifest = await loadManifest(taskDir);
+  await createArtifact(taskDir, { type: "implementation", description: "implementation", content: "i", dependsOn: ["ticket"] });
+  manifest = await loadManifest(taskDir);
+  await setArtifactStatus(manifest, "implementation", "in-review", taskDir);
+  manifest = await setArtifactStatus(manifest, "implementation", "approved", taskDir);
+  await createArtifact(taskDir, {
+    type: "pr-walkthrough",
+    description: "walkthrough",
+    content: "w",
+    dependsOn: ["implementation"],
+  });
+
+  assert.equal((await changeFlow(await loadManifest(taskDir), "rpi", taskDir)).flow, "rpi");
+  await rm(base, { recursive: true, force: true });
+});
+
 test("ticket and supporting artifacts do not block rpi to prd flow changes", async () => {
   const base = await mkTmp();
   await createTask(base, { slug: "flow-support", title: "Flow", flow: "rpi", baseBranch: "main", ticketBody: "ticket" });
