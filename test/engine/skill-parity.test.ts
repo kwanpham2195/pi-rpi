@@ -220,3 +220,38 @@ test("packaged skills retain the upstream 0.39.0 inventory and Pi-native contrac
     }
   }
 });
+
+test("execution skills preserve authorization and managed-artifact boundaries", async () => {
+  const readPkgFile = (path: string) => readFile(resolve(pkgRoot, path), "utf8");
+  const [locator, analyzer, commit, setup, describePr, implementPlan, implementOutline] = await Promise.all([
+    readPkgFile("agents/artifact-locator.md"),
+    readPkgFile("agents/artifact-analyzer.md"),
+    readPkgFile("skills/ci-commit/SKILL.md"),
+    readPkgFile("skills/setup-worktree/SKILL.md"),
+    readPkgFile("skills/describe-pr/SKILL.md"),
+    readPkgFile("skills/implement-plan/SKILL.md"),
+    readPkgFile("skills/implement-outline/SKILL.md"),
+  ]);
+
+  assert.match(locator, /filename and file-glob patterns/i);
+  assert.doesNotMatch(locator, /keyword grep/i);
+  assert.match(analyzer, /truncat(?:ed|ion)[\s\S]*offset/i);
+
+  assert.match(setup, /disable-model-invocation:\s*true/);
+  assert.doesNotMatch(commit, /disable-model-invocation:\s*true/);
+  assert.match(commit, /explicit commit authorization/i);
+  assert.match(commit, /Loading this skill does not authorize a commit/i);
+  assert.match(commit, /source and regression tests/i);
+  assert.doesNotMatch(commit, /Never stage generated, dummy, test-only/);
+  assert.match(implementPlan, /confirm[\s\S]*authorize[\s\S]*commit/i);
+  assert.match(implementOutline, /confirm[\s\S]*authorize[\s\S]*commit/i);
+
+  assert.doesNotMatch(describePr, /skills\/describe-pr\/(?:references|scripts)\//);
+  assert.match(describePr, /explicit user authorization[\s\S]*commit, push, or PR creation/i);
+  assert.match(describePr, /existing active `pr-walkthrough`[\s\S]*rpi_update_artifact/i);
+  assert.match(describePr, /rpi_read_artifact[\s\S]*disposable temporary copy/i);
+  assert.match(describePr, /absolute script path[\s\S]*implementation repository/i);
+  assert.match(describePr, /disposable temporary copy/i);
+  assert.match(describePr, /rpi_update_artifact/);
+  assert.match(describePr, /existing `pr-description`[\s\S]*rpi_update_artifact/i);
+});

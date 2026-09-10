@@ -1,6 +1,6 @@
 ---
 name: ci-commit
-description: "Only use when the user explicitly invokes this skill by name."
+description: "Commits the current task's verified implementation after explicit commit authorization from the user or a calling implementation skill's human gate."
 ---
 
 # Commit Changes
@@ -12,10 +12,10 @@ Create Git commits for the implementation changes made in this session. Never co
 - Use the full session context to identify the work that belongs in these commits.
 - Stage literal, explicit paths only. Never use `git add -A`, `git add .`, `git add -f`, globs, or other broad staging forms.
 - Never stage or commit `.pi/artifacts/` or any path below it. The `/rpi-init` ignore entry is a safeguard, not proof; inspect the index before every commit.
-- Never stage generated, dummy, test-only, or unrelated files, including files created by another task or agent.
+- Stage the implementation's real source and regression tests, including authorized implementation-child work for this task. Exclude temporary probes, generated scratch files, and unrelated work from other tasks or agents.
 - Group related changes into focused, atomic commits. Follow the repository's message convention; otherwise use a conventional, imperative message that states why the change is needed.
 - Run the repository's required relevant checks before committing, or report an already-completed equivalent gate. Never bypass hooks or checks with `--no-verify`.
-- The explicit skill invocation is the user's confirmation to commit. Do not stop to ask for more feedback once this skill is in use.
+- Loading this skill does not authorize a commit. Commit only after explicit user authorization, including explicit confirmation at a calling implementation skill's human gate. Once authorized, do not ask for redundant confirmation.
 
 ## Process
 

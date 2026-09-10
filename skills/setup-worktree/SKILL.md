@@ -1,6 +1,7 @@
 ---
 name: setup-worktree
 description: "Only use when the user explicitly invokes this skill by name."
+disable-model-invocation: true
 ---
 
 # Set Up a Worktree

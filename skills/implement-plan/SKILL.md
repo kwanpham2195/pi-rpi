@@ -38,8 +38,8 @@ For each phase, starting with Phase 1 or the first unchecked:
    - [Manual checks from the plan]
    ```
 
-5. Present the manual-verification gate to the human and wait for confirmation before committing. Do not commit, record the phase commit, mark the phase complete, or start another phase before that confirmation. This gate applies to every phase, including consecutive phases requested in one session.
-6. Commit the phase's code with `ci-commit`; never commit the artifact root. Capture the resulting commit SHA.
+5. Present the manual-verification gate to the human and expressly ask them to confirm the listed checks passed and authorize this phase's commit. Wait for both before committing. Do not commit, record the phase commit, mark the phase complete, or start another phase before that confirmation and authorization. This gate applies to every phase, including consecutive phases requested in one session.
+6. The preceding human confirmation authorizes `ci-commit` for this phase. Commit the phase's code with `ci-commit`; never commit the artifact root. Capture the resulting commit SHA.
 7. Create or update the `implementation` artifact through `rpi_create_artifact` or `rpi_update_artifact` after the verified work. Set `dependsOn: ["ticket"]` for oneshot ticket tasks and `dependsOn: ["plan"]` for plan-backed tasks. The parent owns this artifact mutation.
 8. Call `rpi_record_phase_commit` only after the human gate and Git commit, with `phaseId`, the returned `runId`, and the verified commit SHA.
 9. For plan-backed tasks, the parent must update the authoritative `plan` through `rpi_update_artifact` to mark the verified phase complete. Update its phase completion marker only after the human confirmation, code commit, and receipt above, so resumption can find the next unchecked phase. Oneshot ticket tasks have no plan marker to update.

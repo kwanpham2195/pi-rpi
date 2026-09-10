@@ -38,9 +38,9 @@ For each phase, starting with Phase 1 or the first unchecked:
    - [Manual checks from the outline]
    ```
 
-5. Present the manual-verification gate and wait for the human to confirm the listed checks passed. Do not commit, record the phase commit, mark the phase complete, or start another phase before that confirmation. This gate applies to every phase, including consecutive phases requested in one session.
+5. Present the manual-verification gate and expressly ask the human to confirm the listed checks passed and authorize this phase's commit. Wait for both before committing. Do not commit, record the phase commit, mark the phase complete, or start another phase before that confirmation and authorization. This gate applies to every phase, including consecutive phases requested in one session.
 6. After confirmation, mark the phase complete in the outline through the parent RPI artifact tools, when a marker update is needed. Keep the existing protocol: `- [ ]` becomes `- [x]` only after automated verification, and `## Phase N:` becomes `## ✅ Phase N:` only after the human confirms manual verification.
-7. Commit the phase's code with `ci-commit`; never commit the artifact root. Capture the resulting commit SHA.
+7. The preceding human confirmation authorizes `ci-commit` for this phase. Commit the phase's code with `ci-commit`; never commit the artifact root. Capture the resulting commit SHA.
 8. Create or update the `implementation` artifact through `rpi_create_artifact` or `rpi_update_artifact` after the verified work. Set `dependsOn: ["structure-outline"]` when no plan is used, or `dependsOn: ["plan"]` when a plan exists. The parent owns this artifact mutation.
 9. Call `rpi_record_phase_commit` only after the human gate and Git commit, with `phaseId`, the returned `runId`, and the verified commit SHA.
 10. Repeat for the next phase only after steps 1–9 complete. Use a separate implementer run and verification cycle for every phase.
