@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+- Validated manifests before artifact writes and recovered owned files on persistence failures without hiding rollback evidence.
+- Improved agent-run status recovery for well-formed snapshots that omit the owned run while retaining strict malformed-state failures.
+- Shared one authoritative task artifact root across configured worktrees and kept superseded history from blocking valid flow changes.
+- Added optional `pr-walkthrough` support to standard flows and clarified implementation, worktree, review, commit, and provider-loading instructions.
+- Included linked runtime smoke documentation in the npm package.
 - Increased research and review agent-run defaults to 10 minutes and implementation defaults to 20 minutes.
 - Corrected pi-subagents implementation and review launches to use direct child runs with authoritative task context, owned timeout cleanup, and live activity progress.
 - Replaced stale HumanLayer paths and links in packaged skill templates with Pi artifact and workspace references.

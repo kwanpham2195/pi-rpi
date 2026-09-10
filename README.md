@@ -32,7 +32,7 @@ oneshot: ticket → implementation → pr-description
 freeform: no enforced chain
 ```
 
-`mockup` and `diagram` support rpi, prd, and oneshot flows. `ticket` is task input.
+`mockup`, `diagram`, and `pr-walkthrough` are optional supporting artifacts in rpi, prd, and oneshot flows. They do not block flow changes. `ticket` is task input. Superseded artifacts remain as history but do not block a flow change; active incompatible artifacts still do.
 
 ## Commands
 
@@ -56,7 +56,9 @@ freeform: no enforced chain
 
 ## Manifest and commits
 
-Task state lives in `.pi/artifacts/<slug>/artifact-manifest.json`. It includes artifact hashes, dependencies, status transitions, agent-run receipts, and verified phase-commit receipts. A run receipt proves an agent run, not human verification or a Git commit. In interactive Pi, `/rpi-status` and `/rpi-artifacts` add an expandable report to session history. Its collapsed row shows the next suggested action and a configured keybinding hint. RPC mode receives the report as a notification. For an active task, Pi's built-in footer shows `<slug> · <flow> · actions: <suggestions> · <count> in review`.
+Task state lives in `.pi/artifacts/<slug>/artifact-manifest.json`. It includes artifact hashes, dependencies, status transitions, agent-run receipts, and verified phase-commit receipts. Artifact writes validate the resulting manifest before persistence. If manifest persistence fails, owned new files are removed and replaced files are restored on a best-effort basis; errors retain rollback details. A run receipt proves an agent run, not human verification or a Git commit. Artifact approval is an explicit human status transition. Substantive edits do not currently invalidate an existing approval or its dependents automatically.
+
+In interactive Pi, `/rpi-status` and `/rpi-artifacts` add an expandable report to session history. Its collapsed row shows the next suggested action and a configured keybinding hint. RPC mode receives the report as a notification. For an active task, Pi's built-in footer shows `<slug> · <flow> · actions: <suggestions> · <count> in review`. Agent-run status accepts a well-formed fleet snapshot that omits the owned run only when the targeted status text still supplies its state; malformed snapshots and invalid states fail rather than being treated as progress.
 
 `/rpi-init` ignores the artifact root and `.pi/workspace.local.json`. It creates a shared single-repository worktree config that branches from `origin/main`, uses `~/.pi/workspaces/{{ TASKSLUG }}/{{ REPOBASENAME }}`, and copies local environment and Pi config files. It never replaces an existing `.pi/workspace.json` or writes `.pi/workspace.local.json`. `setup-worktree` links every configured worktree's `.pi/artifacts` to the one authoritative artifact root in the checkout containing the selected task; it stops rather than replace an existing path. A new Pi session in the worktree selects the same task through that link. The staging guard blocks broad, ambiguous, and artifact-root `git add` commands. Use explicit source paths with `ci-commit`; do not stage task artifacts in the implementation repository.
 
@@ -89,3 +91,5 @@ npm test
 ## Installed runtime smoke test
 
 Use the [installed-runtime Tuistory smoke procedure](docs/pi-subagents-smoke.md) with a dedicated session and disposable approved source. It covers successful execution, timeout cleanup, resumable cancellation, artifact integrity, run IDs and states, orphan detection, and session ownership.
+
+The automated suite checks static contracts and engine behavior; it does not prove that a model follows the skills or that the live Pi UI renders correctly. Use the on-screen smoke procedure for the installed runtime boundary.

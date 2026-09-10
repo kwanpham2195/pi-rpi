@@ -83,3 +83,7 @@ tuistory -s pi-rpi-subagents-smoke close
 ```
 
 If you did not create that session, leave it running.
+
+## Scope and remaining manual checks
+
+This is an on-screen installed-runtime check, not an automated-test substitute. Record Pi and `pi-subagents` versions with the evidence. The procedure does not exercise `setup-worktree`, filesystem fault injection during manifest persistence, or automatic invalidation of approvals after substantive edits. Verify shared-worktree linking separately in a disposable Git worktree. Approval invalidation is not currently implemented.

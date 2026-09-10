@@ -20,7 +20,8 @@
     "src",
     "README.md",
     "CHANGELOG.md",
-    "SAMPLES.md"
+    "SAMPLES.md",
+    "docs"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
