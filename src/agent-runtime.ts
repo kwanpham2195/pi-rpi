@@ -278,23 +278,25 @@ function parseRunStatus(data: RpcData, runId: string): ParsedRunStatus {
       throw new Error("Invalid pi-subagents status reply: data.asyncSnapshot is invalid.");
     }
     const run = snapshot.runs.find((candidate) => isRecord(candidate) && candidate.id === runId);
-    if (!isRecord(run)) {
-      throw new Error(`Invalid pi-subagents status reply: asyncSnapshot has no state for run ${runId}.`);
+    if (isRecord(run)) {
+      const state = parseRunState(run.state);
+      if (!state) throw new Error(`Invalid pi-subagents status reply: unknown asyncSnapshot state "${String(run.state)}".`);
+      const activity = parseActiveRunActivity(run);
+      return {
+        runId,
+        state,
+        ...(activity ? { activity } : {}),
+      };
     }
-    const state = parseRunState(run.state);
-    if (!state) throw new Error(`Invalid pi-subagents status reply: unknown asyncSnapshot state "${String(run.state)}".`);
-    const activity = parseActiveRunActivity(run);
-    return {
-      runId,
-      state,
-      ...(activity ? { activity } : {}),
-    };
   }
   const fallback = typeof data.text === "string"
     ? data.text.match(/(?:^|\n)\s*State:\s*(queued|running|complete|completed|partial|failed|paused|stopped|rejected)\b/i)?.[1]
     : undefined;
   const state = fallback ? parseRunState(fallback) : undefined;
-  if (!state) throw new Error("Invalid pi-subagents status reply: data.asyncSnapshot is required.");
+  if (!state) {
+    if (snapshot !== undefined) throw new Error(`Invalid pi-subagents status reply: asyncSnapshot has no state for run ${runId}.`);
+    throw new Error("Invalid pi-subagents status reply: data.asyncSnapshot is required.");
+  }
   return { runId, state };
 }
 

@@ -355,6 +355,89 @@ test("partial completion events are preserved", async () => {
   assert.deepEqual(receipt.payload, { runId: "run-1", state: "partial", output: "settled evidence" });
 });
 
+test("targeted status text supplies state when a valid bounded snapshot omits the owned run", async () => {
+  let statusCount = 0;
+  const bridge = new FakeBridge({ onRequest: (request, reply) => {
+    const respond = (data: Record<string, unknown>) => reply({ version: 1, requestId: request.requestId, success: true, data });
+    if (request.method === "ping") return respond(PI_SUBAGENTS_RPC_V1_FIXTURE.ping);
+    if (request.method === "spawn") return respond({ text: "spawned", details: { runId: "owned-run" } });
+    if (request.method === "status") {
+      statusCount += 1;
+      const state = statusCount === 1 ? "running" : "complete";
+      return respond({
+        text: `Agent: artifact-implementer\nState: ${state}`,
+        asyncSnapshot: {
+          kind: "pi-subagents.async-status-snapshot",
+          version: 1,
+          runs: [{ id: "another-run", state: "running" }],
+        },
+      });
+    }
+    assert.fail(`Unexpected cleanup RPC: ${request.method}`);
+  } });
+
+  const receipt = await implementPhase(bridge.pi, "artifact-implementer", "task", "/tmp", {
+    runTimeoutMs: 100,
+    pollIntervalMs: 0,
+    completionGraceMs: 0,
+  });
+
+  assert.equal(receipt.state, "complete");
+  assert.equal(bridge.methods.includes("stop"), false);
+});
+
+for (const invalidStatus of [
+  {
+    name: "missing owned-run state in both snapshot and targeted text",
+    data: {
+      text: "Agent: artifact-implementer",
+      asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "another-run", state: "running" }] },
+    },
+    error: /asyncSnapshot has no state for run owned-run/,
+  },
+  {
+    name: "malformed snapshot even when targeted text has a state",
+    data: {
+      text: "State: running",
+      asyncSnapshot: { kind: "wrong-kind", version: 1, runs: [] },
+    },
+    error: /data\.asyncSnapshot is invalid/,
+  },
+  {
+    name: "invalid present owned-run state even when targeted text has a state",
+    data: {
+      text: "State: running",
+      asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "owned-run", state: "mystery" }] },
+    },
+    error: /unknown asyncSnapshot state "mystery"/,
+  },
+] as const) {
+  test(`targeted status rejects ${invalidStatus.name}`, async () => {
+    let stopping = false;
+    const bridge = new FakeBridge({ onRequest: (request, reply) => {
+      const respond = (data: Record<string, unknown>) => reply({ version: 1, requestId: request.requestId, success: true, data });
+      if (request.method === "ping") return respond(PI_SUBAGENTS_RPC_V1_FIXTURE.ping);
+      if (request.method === "spawn") return respond({ text: "spawned", details: { runId: "owned-run" } });
+      if (request.method === "stop") {
+        stopping = true;
+        return respond({ text: "stopped" });
+      }
+      if (request.method === "status" && stopping) {
+        return respond({ asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "owned-run", state: "stopped" }] } });
+      }
+      if (request.method === "status") return respond(invalidStatus.data);
+      assert.fail(`Unexpected RPC method: ${request.method}`);
+    } });
+
+    await assert.rejects(implementPhase(bridge.pi, "artifact-implementer", "task", "/tmp", {
+      runTimeoutMs: 100,
+      pollIntervalMs: 0,
+      completionGraceMs: 0,
+    }), invalidStatus.error);
+    assert.equal(bridge.methods.includes("stop"), true);
+  });
+}
+
 test("status activity is parsed and minimal older snapshots remain valid", async () => {
   const bridge = statusBridge([
     { state: "running", activity: { currentTool: "bash", turnCount: 12, toolCount: 24 } },
