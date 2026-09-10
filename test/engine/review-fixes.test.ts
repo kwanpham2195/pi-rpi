@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -28,6 +28,54 @@ test("createTask rejects invalid required fields before writing task artifacts",
       /manifest\.title/,
     );
     assert.deepEqual(await readdir(join(base, "invalid-task")), []);
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("createArtifact rolls back its file when the manifest save fails and can be retried", async () => {
+  const base = await mkTmp();
+  const taskDir = join(base, "create-recovery");
+  try {
+    await createTask(base, { slug: "create-recovery", title: "Create recovery", flow: "freeform", baseBranch: "main" });
+    await mkdir(join(taskDir, "artifact-manifest.json.bak"));
+
+    await assert.rejects(
+      createArtifact(taskDir, { type: "research", description: "research", content: "new content", dependsOn: [] }),
+    );
+    assert.deepEqual((await readdir(taskDir)).sort(), ["artifact-manifest.json", "artifact-manifest.json.bak"]);
+    assert.equal((await loadManifest(taskDir)).artifacts.length, 0);
+
+    await rm(join(taskDir, "artifact-manifest.json.bak"), { recursive: true });
+    const retried = await createArtifact(taskDir, { type: "research", description: "research", content: "new content", dependsOn: [] });
+    assert.equal(await readFile(retried.path, "utf8"), "new content");
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("updateArtifact restores original bytes when the manifest save fails and can be retried", async () => {
+  const base = await mkTmp();
+  const taskDir = join(base, "update-recovery");
+  try {
+    await createTask(base, { slug: "update-recovery", title: "Update recovery", flow: "freeform", baseBranch: "main" });
+    const created = await createArtifact(taskDir, { type: "research", description: "research", content: "original", dependsOn: [] });
+    const originalManifest = await loadManifest(taskDir);
+    await rm(join(taskDir, "artifact-manifest.json.bak"));
+    await mkdir(join(taskDir, "artifact-manifest.json.bak"));
+
+    await assert.rejects(updateArtifact(taskDir, "research", "replacement"));
+    assert.equal(await readFile(created.path, "utf8"), "original");
+    assert.equal((await loadManifest(taskDir)).artifacts[0]?.contentHash, originalManifest.artifacts[0]?.contentHash);
+    assert.deepEqual(
+      (await readdir(taskDir)).filter((name) => name.includes(".tmp-") || name.includes(".rollback-")),
+      [],
+    );
+
+    await rm(join(taskDir, "artifact-manifest.json.bak"), { recursive: true });
+    const retried = await updateArtifact(taskDir, "research", "replacement");
+    assert.equal(await readFile(created.path, "utf8"), "replacement");
+    assert.equal((await loadManifest(taskDir)).artifacts[0]?.contentHash, retried.artifact.contentHash);
   } finally {
     await rm(base, { recursive: true, force: true });
   }

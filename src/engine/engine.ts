@@ -7,6 +7,7 @@
  */
 
 import { mkdir, readFile, rename, writeFile, copyFile, access, stat, realpath, unlink } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import { dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { isWithinRoot } from "../paths.ts";
@@ -163,6 +164,24 @@ function isFileExistsError(cause: unknown): boolean {
 
 function isFileMissingError(cause: unknown): boolean {
   return typeof cause === "object" && cause !== null && "code" in cause && (cause as { code?: unknown }).code === "ENOENT";
+}
+type RollbackStep = { readonly label: string; readonly run: () => Promise<void>; readonly ignoreMissing?: true };
+
+async function rethrowWithRollback(cause: unknown, steps: readonly RollbackStep[]): Promise<never> {
+  const rollbackFailures: unknown[] = [];
+  for (const step of steps) {
+    try {
+      await step.run();
+    } catch (rollbackCause: unknown) {
+      if (!(step.ignoreMissing && isFileMissingError(rollbackCause))) {
+        rollbackFailures.push(new AggregateError([rollbackCause], `Rollback step failed: ${step.label}`));
+      }
+    }
+  }
+  if (rollbackFailures.length > 0) {
+    throw new AggregateError([cause, ...rollbackFailures], "Persistence failed and rollback was incomplete.", { cause });
+  }
+  throw cause;
 }
 function synchronizeManifest(target: TaskManifest, source: TaskManifest): TaskManifest {
   Object.assign(target, source);
@@ -354,15 +373,19 @@ export async function saveManifest(taskDir: string, manifest: TaskManifest): Pro
     const path = manifestPath(taskDir);
     // Atomic write: write a temp file then rename (and back up current first)
     const tmp = `${path}.tmp-${process.pid}-${randomUUID()}`;
-    await writeFile(tmp, JSON.stringify(manifest, null, 2), "utf8");
-    // Back up the existing manifest if present
     try {
-      await access(path);
-      await copyFile(path, backupPath(taskDir));
+      await writeFile(tmp, JSON.stringify(manifest, null, 2), "utf8");
+      // Back up the existing manifest if present
+      try {
+        await access(path);
+        await copyFile(path, backupPath(taskDir));
+      } catch (cause: unknown) {
+        if (!isFileMissingError(cause)) throw cause;
+      }
+      await rename(tmp, path);
     } catch (cause: unknown) {
-      if (!isFileMissingError(cause)) throw cause;
+      await rethrowWithRollback(cause, [{ label: `remove manifest temp ${tmp}`, run: () => unlink(tmp), ignoreMissing: true }]);
     }
-    await rename(tmp, path);
   });
 }
 
@@ -570,19 +593,26 @@ export async function createTask(baseDir: string, input: CreateTaskInput): Promi
     const existing = await tryLoadManifest(taskDir);
     if (existing) return existing;
     const manifest = newManifest({ slug: input.slug, title: input.title, flow: input.flow, baseBranch: input.baseBranch, ticketUrl: input.ticketUrl });
+    let createdTicketPath: string | undefined;
     if (input.ticketBody !== undefined) {
       const ticketPath = "ticket.md";
       const content = input.ticketBody;
       manifest.artifacts.push({ id: "ticket", type: "ticket", path: ticketPath, status: "approved", dependsOn: [], contentHash: hashContent(content), updatedAt: new Date().toISOString() });
       parseTaskManifest(manifest, taskDir);
       try {
-        await writeFile(join(taskDir, ticketPath), content, { encoding: "utf8", flag: "wx" });
+        createdTicketPath = join(taskDir, ticketPath);
+        await writeFile(createdTicketPath, content, { encoding: "utf8", flag: "wx" });
       } catch (cause: unknown) {
         if (isFileExistsError(cause)) throw new EngineError(`unmanaged artifact file collision at ${join(taskDir, ticketPath)}; refusing to overwrite it.`);
         throw cause;
       }
     }
-    await saveManifest(taskDir, manifest);
+    try {
+      await saveManifest(taskDir, manifest);
+    } catch (cause: unknown) {
+      if (createdTicketPath === undefined) throw cause;
+      await rethrowWithRollback(cause, [{ label: `remove ticket ${createdTicketPath}`, run: () => unlink(createdTicketPath) }]);
+    }
     return manifest;
   });
 }
@@ -969,7 +999,11 @@ export async function createArtifact(
       }
     }
 
-    await saveManifest(taskDir, manifest);
+    try {
+      await saveManifest(taskDir, manifest);
+    } catch (cause: unknown) {
+      await rethrowWithRollback(cause, [{ label: `remove artifact ${fullPath}`, run: () => unlink(fullPath) }]);
+    }
     return { manifest, artifact, path: fullPath };
   });
 }
@@ -998,18 +1032,27 @@ export async function updateArtifact(
     artifact.contentHash = hashContent(content);
     artifact.updatedAt = new Date().toISOString();
     const temporaryPath = `${abs}.tmp-${process.pid}-${randomUUID()}`;
+    const rollbackPath = `${abs}.rollback-${process.pid}-${randomUUID()}`;
+    let rollbackCopyCreated = false;
+    let replacementInstalled = false;
     try {
       await writeFile(temporaryPath, content, { encoding: "utf8", flag: "wx" });
+      await copyFile(abs, rollbackPath, fsConstants.COPYFILE_EXCL);
+      rollbackCopyCreated = true;
       await rename(temporaryPath, abs);
+      replacementInstalled = true;
+      await saveManifest(taskDir, manifest);
     } catch (cause: unknown) {
-      try {
-        await unlink(temporaryPath);
-      } catch (cleanupCause: unknown) {
-        if (!isFileMissingError(cleanupCause)) throw cleanupCause;
-      }
-      throw cause;
+      const steps: RollbackStep[] = [{ label: `remove artifact temp ${temporaryPath}`, run: () => unlink(temporaryPath), ignoreMissing: true }];
+      if (replacementInstalled) steps.push({ label: `restore artifact ${abs}`, run: () => rename(rollbackPath, abs) });
+      else if (rollbackCopyCreated) steps.push({ label: `remove artifact rollback copy ${rollbackPath}`, run: () => unlink(rollbackPath) });
+      await rethrowWithRollback(cause, steps);
     }
-    await saveManifest(taskDir, manifest);
+    try {
+      await unlink(rollbackPath);
+    } catch (cause: unknown) {
+      throw new AggregateError([cause], "Artifact update was saved, but rollback backup cleanup failed.", { cause });
+    }
     return { manifest, artifact };
   });
 }
