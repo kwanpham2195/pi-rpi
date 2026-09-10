@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,6 +9,7 @@ import {
   createTask,
   findArtifact,
   loadManifest,
+  recordPhaseCommit,
   resolvePrecedence,
   setArtifactStatus,
   updateArtifact,
@@ -18,6 +19,58 @@ import {
 async function mkTmp(): Promise<string> {
   return mkdtemp(join(tmpdir(), "rpi-fix-"));
 }
+
+test("createTask rejects invalid required fields before writing task artifacts", async () => {
+  const base = await mkTmp();
+  try {
+    await assert.rejects(
+      createTask(base, { slug: "invalid-task", title: "", flow: "freeform", baseBranch: "main", ticketBody: "ticket" }),
+      /manifest\.title/,
+    );
+    assert.deepEqual(await readdir(join(base, "invalid-task")), []);
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("createArtifact rejects duplicate dependencies without changing task files", async () => {
+  const base = await mkTmp();
+  const taskDir = join(base, "duplicate-dependencies");
+  try {
+    await createTask(base, { slug: "duplicate-dependencies", title: "Dependencies", flow: "freeform", baseBranch: "main" });
+    const dependency = await createArtifact(taskDir, { type: "research", description: "research", content: "source", dependsOn: [] });
+    await setArtifactStatus(dependency.manifest, dependency.artifact.id, "in-review", taskDir);
+    await setArtifactStatus(dependency.manifest, dependency.artifact.id, "approved", taskDir);
+    const manifestBefore = await readFile(join(taskDir, "artifact-manifest.json"), "utf8");
+    const inventoryBefore = await readdir(taskDir);
+
+    await assert.rejects(
+      createArtifact(taskDir, { type: "design-discussion", description: "design", content: "new", dependsOn: ["research", "research"] }),
+      /duplicate dependency/,
+    );
+
+    assert.equal(await readFile(join(taskDir, "artifact-manifest.json"), "utf8"), manifestBefore);
+    assert.deepEqual(await readdir(taskDir), inventoryBefore);
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("recordPhaseCommit rejects empty receipt fields without changing the manifest", async () => {
+  const base = await mkTmp();
+  const taskDir = join(base, "empty-receipt");
+  try {
+    await createTask(base, { slug: "empty-receipt", title: "Receipt", flow: "freeform", baseBranch: "main" });
+    const manifestBefore = await readFile(join(taskDir, "artifact-manifest.json"), "utf8");
+
+    await assert.rejects(recordPhaseCommit(taskDir, "", "run-1", "a".repeat(40)), /phaseId/);
+    await assert.rejects(recordPhaseCommit(taskDir, "Phase 1: implement", "", "a".repeat(40)), /runId/);
+
+    assert.equal(await readFile(join(taskDir, "artifact-manifest.json"), "utf8"), manifestBefore);
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
 
 test("duplicate type creation is rejected unless superseding", async () => {
   const base = await mkTmp();

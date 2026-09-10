@@ -347,6 +347,7 @@ export async function loadManifest(taskDir: string): Promise<TaskManifest> {
 }
 
 export async function saveManifest(taskDir: string, manifest: TaskManifest): Promise<void> {
+  parseTaskManifest(manifest, taskDir);
   await enqueueSave(async () => {
     const dir = dirname(taskDir);
     await mkdir(dir, { recursive: true });
@@ -572,13 +573,14 @@ export async function createTask(baseDir: string, input: CreateTaskInput): Promi
     if (input.ticketBody !== undefined) {
       const ticketPath = "ticket.md";
       const content = input.ticketBody;
+      manifest.artifacts.push({ id: "ticket", type: "ticket", path: ticketPath, status: "approved", dependsOn: [], contentHash: hashContent(content), updatedAt: new Date().toISOString() });
+      parseTaskManifest(manifest, taskDir);
       try {
         await writeFile(join(taskDir, ticketPath), content, { encoding: "utf8", flag: "wx" });
       } catch (cause: unknown) {
         if (isFileExistsError(cause)) throw new EngineError(`unmanaged artifact file collision at ${join(taskDir, ticketPath)}; refusing to overwrite it.`);
         throw cause;
       }
-      manifest.artifacts.push({ id: "ticket", type: "ticket", path: ticketPath, status: "approved", dependsOn: [], contentHash: hashContent(content), updatedAt: new Date().toISOString() });
     }
     await saveManifest(taskDir, manifest);
     return manifest;
@@ -889,7 +891,10 @@ export async function createArtifact(
       throw new EngineError("dependsOn must be provided as an array.");
     }
     const requiredDependencies = requiredDependencyIds(manifest, input.type);
-    const dependencyIds = input.dependsOn;
+    const dependencyIds = parseStringArray(input.dependsOn, "dependsOn");
+    if (new Set(dependencyIds).size !== dependencyIds.length) {
+      throw new EngineError("Invalid dependsOn: duplicate dependency.");
+    }
     if (requiredDependencies !== undefined && (dependencyIds.length !== requiredDependencies.length || dependencyIds.some((id, index) => id !== requiredDependencies[index]))) {
       throw new EngineError(`Artifact type "${input.type}" requires dependsOn: [${requiredDependencies.join(", ")}].`);
     }
