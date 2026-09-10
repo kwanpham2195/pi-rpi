@@ -64,7 +64,12 @@ Task state lives in `.pi/artifacts/<slug>/artifact-manifest.json`. It includes a
 
 - Pi 0.84.4+
 - pi-subagents 0.50+ installed separately with `pi install npm:pi-subagents`; required only for agent-run tools.
+- Provider extensions for the package agents' custom tools. Pi and pi-subagents alone do not provide them:
+  - Install `pi-web-access` with `pi install npm:pi-web-access` for `web_search`, `fetch_content`, and `get_search_content`.
+  - Provide tools named `fffind` (filename/glob discovery) and `ffgrep` (content search) through a trusted custom extension. No public provider package for these tools is identified by this project, so pi-rpi does not prescribe an install command.
 - Plannotator CLI (optional; required only for `/rpi-annotate`).
+
+The `tools` field in a pi-subagents agent is a strict allowlist; it does not load extension code. A provider available to the parent can still be absent from a child. Load each provider for the child through the agent's `subagentOnlyExtensions` (child-only) or `extensions` field, or as a path-like entry in `tools`, while retaining the registered tool names in `tools`. If `extensions` is present, it filters normal extension discovery, so include every required provider there.
 
 ## Agent-run contract
 

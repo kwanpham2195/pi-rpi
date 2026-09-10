@@ -236,8 +236,9 @@ async function waitForCompletion(pi: ExtensionAPI, runId: string, deadline: numb
         if (Date.now() >= deadline) throw runDeadlineError(runId, runTimeoutMs);
         const eventCompletion = await waitForCompletionEventGrace(() => completion, waitController.signal, options);
         if (eventCompletion) return eventCompletion;
-        if (isUnknownAgentFailure(parsed.state, status.data)) {
-          throw agentUnavailableError(new Error(`child run ${runId} ended ${parsed.state}: ${JSON.stringify(status.data).slice(0, 400)}`));
+        const evidence = actionableAgentFailureEvidence(parsed.state, status.data);
+        if (evidence) {
+          throw agentUnavailableError(new Error(`child run ${runId} ended ${parsed.state}: ${evidence}`));
         }
         return { state: parsed.state, payload: status.data };
       }
@@ -364,8 +365,16 @@ function optionalProgressFields(progress: ParsedRunStatus): Omit<RunProgress, "r
   };
 }
 
-function isUnknownAgentFailure(state: RunState, payload: unknown): boolean {
-  return ["failed", "rejected"].includes(state) && /unknown agent|agent.*not.*regist|no such agent|invalid agent/i.test(JSON.stringify(payload));
+function actionableAgentFailureEvidence(state: RunState, payload: RpcData): string | undefined {
+  if (!["failed", "rejected"].includes(state)) return undefined;
+  const pattern = /unknown agent|agent.*not.*regist|no such agent|invalid agent|requested unavailable child tools/i;
+  const serialized = JSON.stringify(payload);
+  const text = typeof payload.text === "string" ? payload.text : "";
+  const source = pattern.test(text) ? text : serialized;
+  const diagnosticIndex = source.search(pattern);
+  if (diagnosticIndex < 0) return undefined;
+  const start = Math.max(0, diagnosticIndex - 100);
+  return source.slice(start, start + 1_200);
 }
 
 async function stopOwnedRun(pi: ExtensionAPI, runId: string): Promise<CleanupResult> {
@@ -485,6 +494,9 @@ function subagentsRpcUnavailableError(message: string): Error {
 /** Surface actionable guidance when installed package agents are unavailable. */
 export function agentUnavailableError(err: unknown): Error {
   const msg = err instanceof Error ? err.message : String(err);
+  if (/requested unavailable child tools/i.test(msg)) {
+    return new Error(`The pi-rpi child is missing required extension tools (${msg}). The agent tools field is a strict allowlist; it does not load extension code. Load the provider in the child through subagentOnlyExtensions (child-only), extensions, or a path-like tools entry, and keep each registered tool name in tools.`);
+  }
   if (/unknown agent|agent.*not.*regist|no such agent|invalid agent|timed out|did not reach a terminal state/i.test(msg)) {
     return new Error(`The pi-rpi agents could not run (${msg}). Install pi-subagents separately with pi install npm:pi-subagents, confirm pi-rpi is installed with pi list, then retry.`);
   }

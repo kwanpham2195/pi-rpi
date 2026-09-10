@@ -37,6 +37,16 @@ test("changelog has one valid Unreleased heading", async () => {
   assert.doesNotMatch(text, /^-## Unreleased$/m);
 });
 
+test("README documents provider extensions required by package agents", async () => {
+  const text = await readFile(resolve(pkgRoot, "README.md"), "utf8");
+  assert.match(text, /pi install npm:pi-web-access/);
+  assert.match(text, /web_search.*fetch_content.*get_search_content/s);
+  assert.match(text, /fffind.*ffgrep/s);
+  assert.match(text, /strict allowlist.*does not load extension code/is);
+  assert.match(text, /subagentOnlyExtensions.*extensions/s);
+  assert.match(text, /Pi and pi-subagents alone do not provide/i);
+});
+
 test("implementation agents are code-only writer lanes", async () => {
   for (const name of ["artifact-implementer.md", "artifact-outline-implementer.md"]) {
     const text = await readFile(resolve(pkgRoot, "agents", name), "utf8");

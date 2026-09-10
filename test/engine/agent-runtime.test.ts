@@ -438,6 +438,41 @@ for (const invalidStatus of [
   });
 }
 
+test("missing child extension tools surface bounded provider-loading remediation", async () => {
+  const diagnostic = [
+    "Agent 'artifact-locator' requested unavailable child tools: fffind.",
+    "The `tools` field is a strict allowlist; it does not load extension code.",
+    "For extension tools, add the provider path to `subagentOnlyExtensions` (child-only), `extensions`, or as a path-like entry in `tools`, while keeping each registered tool name in `tools`.",
+  ].join("\n");
+  for (const failureData of [
+    { text: "State: failed", details: { childToolDiagnostic: diagnostic } },
+    { text: `${"unrelated output ".repeat(100)}${diagnostic}` },
+  ]) {
+    const bridge = new FakeBridge({ onRequest: (request, reply) => {
+      const respond = (data: Record<string, unknown>) => reply({ version: 1, requestId: request.requestId, success: true, data });
+      if (request.method === "ping") return respond(PI_SUBAGENTS_RPC_V1_FIXTURE.ping);
+      if (request.method === "spawn") return respond({ text: "spawned", details: { runId: "missing-tool-run" } });
+      if (request.method === "status") return respond({
+        ...failureData,
+        asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "missing-tool-run", state: "failed" }] },
+      });
+      assert.fail(`Unexpected RPC method: ${request.method}`);
+    } });
+
+    await assert.rejects(startResearch(bridge.pi, ["artifact-locator", "artifact-analyzer"], ["a", "b"], "/tmp", {
+      pollIntervalMs: 0,
+      completionGraceMs: 0,
+    }), (error: Error) => {
+      assert.match(error.message, /requested unavailable child tools: fffind/);
+      assert.match(error.message, /strict allowlist; it does not load extension code/);
+      assert.match(error.message, /subagentOnlyExtensions.*extensions/s);
+      assert.ok(error.message.length < 1_600);
+      assert.doesNotMatch(error.message, /Install pi-subagents/);
+      return true;
+    });
+  }
+});
+
 test("status activity is parsed and minimal older snapshots remain valid", async () => {
   const bridge = statusBridge([
     { state: "running", activity: { currentTool: "bash", turnCount: 12, toolCount: 24 } },
