@@ -16,6 +16,7 @@ import {
   openTask,
   resolvePrecedence,
   readArtifact,
+  recordPhaseCommit,
   setArtifactStatus,
   setBaseBranch,
   updateArtifact,
@@ -113,7 +114,7 @@ test("createArtifact assigns chronological NN names and validates flow", async (
     type: "research-questions",
     description: "current-state",
     content: "# Questions\n",
-  dependsOn: [],
+    dependsOn: [],
   });
   assert.equal(r1.artifact.path, "01-research-questions-current-state.md");
   await setArtifactStatus(r1.manifest, "research-questions", "in-review", taskDir);
@@ -123,7 +124,7 @@ test("createArtifact assigns chronological NN names and validates flow", async (
     type: "research",
     description: "auth-current",
     content: "# Research\n",
-   dependsOn: ["research-questions"],
+    dependsOn: ["research-questions"],
   });
   assert.equal(r2.artifact.path, "02-research-auth-current.md");
 
@@ -140,7 +141,10 @@ test("createArtifact normalizes human descriptions and rejects unsafe filename i
   await createTask(base, { slug: "description-input", title: "Description", flow: "freeform", baseBranch: "main" });
   const taskDir = join(base, "description-input");
   const created = await createArtifact(taskDir, {
-    type: "research", description: "Ship New__Artifact Feature", content: "", dependsOn: [],
+    type: "research",
+    description: "Ship New__Artifact Feature",
+    content: "",
+    dependsOn: [],
   });
   assert.equal(created.artifact.path, "01-research-ship-new-artifact-feature.md");
   for (const description of ["unsafe/name", "unsafe\\name", "unsafe.name", "---"]) {
@@ -157,20 +161,36 @@ test("createArtifact requires approved dependencies", async () => {
   await createTask(base, { slug: "dependency-status", title: "Dependencies", flow: "rpi", baseBranch: "main" });
   const taskDir = join(base, "dependency-status");
   const questions = await createArtifact(taskDir, {
-    type: "research-questions", description: "Questions", content: "", dependsOn: [],
+    type: "research-questions",
+    description: "Questions",
+    content: "",
+    dependsOn: [],
   });
   await assert.rejects(
-    createArtifact(taskDir, { type: "research", description: "Research", content: "", dependsOn: ["research-questions"] }),
+    createArtifact(taskDir, {
+      type: "research",
+      description: "Research",
+      content: "",
+      dependsOn: ["research-questions"],
+    }),
     /Dependency "research-questions" has status "draft"/,
   );
   await setArtifactStatus(questions.manifest, "research-questions", "in-review", taskDir);
   await assert.rejects(
-    createArtifact(taskDir, { type: "research", description: "Research", content: "", dependsOn: ["research-questions"] }),
+    createArtifact(taskDir, {
+      type: "research",
+      description: "Research",
+      content: "",
+      dependsOn: ["research-questions"],
+    }),
     /Dependency "research-questions" has status "in-review"/,
   );
   await setArtifactStatus(questions.manifest, "research-questions", "approved", taskDir);
   const research = await createArtifact(taskDir, {
-    type: "research", description: "Research", content: "", dependsOn: ["research-questions"],
+    type: "research",
+    description: "Research",
+    content: "",
+    dependsOn: ["research-questions"],
   });
   assert.equal(research.artifact.path, "02-research-research.md");
   await rm(base, { recursive: true, force: true });
@@ -187,30 +207,44 @@ test("createArtifact validates dependencies", async () => {
   const taskDir = join(base, "dep-test");
   await assert.rejects(
     createArtifact(taskDir, {
-      type: "research", description: "no-predecessor", content: "", dependsOn: [],
+      type: "research",
+      description: "no-predecessor",
+      content: "",
+      dependsOn: [],
     }),
     /requires active predecessor "research-questions"/,
   );
   const questions = await createArtifact(taskDir, {
-    type: "research-questions", description: "qs", content: "", dependsOn: [],
+    type: "research-questions",
+    description: "qs",
+    content: "",
+    dependsOn: [],
   });
   await setArtifactStatus(questions.manifest, "research-questions", "in-review", taskDir);
   await setArtifactStatus(questions.manifest, "research-questions", "approved", taskDir);
   await assert.rejects(
     createArtifact(taskDir, {
-      type: "research", description: "omitted", content: "",
+      type: "research",
+      description: "omitted",
+      content: "",
     } as unknown as Parameters<typeof createArtifact>[1]),
     /dependsOn must be provided/,
   );
   await assert.rejects(
     createArtifact(taskDir, {
-      type: "research", description: "wrong", content: "", dependsOn: ["does-not-exist"],
+      type: "research",
+      description: "wrong",
+      content: "",
+      dependsOn: ["does-not-exist"],
     }),
     /requires dependsOn: \[research-questions\]/,
   );
   await assert.rejects(
     createArtifact(taskDir, {
-      type: "research", description: "missing", content: "", dependsOn: [],
+      type: "research",
+      description: "missing",
+      content: "",
+      dependsOn: [],
     }),
     /requires dependsOn: \[research-questions\]/,
   );
@@ -231,7 +265,7 @@ test("updateArtifact updates content hash", async () => {
     type: "research",
     description: "x",
     content: "v1",
-  dependsOn: [],
+    dependsOn: [],
   });
   const h1 = r.artifact.contentHash;
   const updated = await updateArtifact(taskDir, "research", "v2 longer");
@@ -239,6 +273,115 @@ test("updateArtifact updates content hash", async () => {
   // hashFile on disk matches
   const onDisk = await hashFile(join(taskDir, r.artifact.path));
   assert.equal(onDisk, updated.artifact.contentHash);
+  await rm(base, { recursive: true, force: true });
+});
+
+test("substantive artifact updates invalidate approved and in-review transitive dependents while preserving history", async () => {
+  const base = await mkTmp();
+  await createTask(base, {
+    slug: "approval-integrity",
+    title: "Approval integrity",
+    flow: "freeform",
+    baseBranch: "main",
+  });
+  const taskDir = join(base, "approval-integrity");
+  await createArtifact(taskDir, { type: "research", description: "source", content: "original", dependsOn: [] });
+  await setArtifactStatus(await loadManifest(taskDir), "research", "in-review", taskDir);
+  await setArtifactStatus(await loadManifest(taskDir), "research", "approved", taskDir);
+  await createArtifact(taskDir, { type: "plan", description: "dependent", content: "plan", dependsOn: ["research"] });
+  await setArtifactStatus(await loadManifest(taskDir), "plan", "in-review", taskDir);
+  await setArtifactStatus(await loadManifest(taskDir), "plan", "approved", taskDir);
+  await createArtifact(taskDir, {
+    type: "implementation",
+    description: "transitive",
+    content: "implementation",
+    dependsOn: ["plan"],
+  });
+  await setArtifactStatus(await loadManifest(taskDir), "implementation", "in-review", taskDir);
+  await recordPhaseCommit(taskDir, "Phase 9: Historical", "run-old", "c".repeat(40));
+  const receiptsBefore = (await loadManifest(taskDir)).receipts.length;
+  const result = await updateArtifact(taskDir, "research", "changed");
+  assert.deepEqual(result.invalidatedArtifactIds, ["research", "plan", "implementation"]);
+  assert.deepEqual(
+    result.manifest.artifacts.map((artifact) => artifact.status),
+    ["draft", "draft", "draft"],
+  );
+  assert.ok(result.manifest.receipts.length > receiptsBefore);
+  assert.equal(result.manifest.receipts.filter((receipt) => receipt.kind === "approval").length, 2);
+  assert.equal(result.manifest.receipts.filter((receipt) => receipt.kind === "phase-commit").length, 1);
+  await rm(base, { recursive: true, force: true });
+});
+
+test("substantive updates do not invalidate through superseded history", async () => {
+  const base = await mkTmp();
+  await createTask(base, {
+    slug: "superseded-integrity",
+    title: "Superseded integrity",
+    flow: "freeform",
+    baseBranch: "main",
+  });
+  const taskDir = join(base, "superseded-integrity");
+  await createArtifact(taskDir, { type: "research", description: "source", content: "source", dependsOn: [] });
+  await setArtifactStatus(await loadManifest(taskDir), "research", "in-review", taskDir);
+  await setArtifactStatus(await loadManifest(taskDir), "research", "approved", taskDir);
+  await createArtifact(taskDir, { type: "plan", description: "old", content: "old", dependsOn: ["research"] });
+  await setArtifactStatus(await loadManifest(taskDir), "plan", "in-review", taskDir);
+  await setArtifactStatus(await loadManifest(taskDir), "plan", "approved", taskDir);
+  await createArtifact(taskDir, {
+    type: "implementation",
+    description: "dependent",
+    content: "dependent",
+    dependsOn: ["plan"],
+  });
+  await setArtifactStatus(await loadManifest(taskDir), "implementation", "in-review", taskDir);
+  await setArtifactStatus(await loadManifest(taskDir), "implementation", "approved", taskDir);
+  await createArtifact(taskDir, {
+    type: "plan",
+    description: "replacement",
+    content: "replacement",
+    dependsOn: ["research"],
+    supersedes: "plan",
+  });
+
+  const result = await updateArtifact(taskDir, "research", "changed");
+  assert.deepEqual(result.invalidatedArtifactIds, ["research"]);
+  assert.equal(result.manifest.artifacts.find((artifact) => artifact.id === "plan")?.status, "superseded");
+  assert.equal(result.manifest.artifacts.find((artifact) => artifact.id === "implementation")?.status, "approved");
+  await rm(base, { recursive: true, force: true });
+});
+
+test("only exact receipt-backed phase heading markers preserve approval", async () => {
+  const base = await mkTmp();
+  await createTask(base, { slug: "phase-markers", title: "Phase markers", flow: "freeform", baseBranch: "main" });
+  const taskDir = join(base, "phase-markers");
+  const original = "# Plan\n\n## Phase 1: Build it\n\n- [ ] verify\n";
+  await createArtifact(taskDir, { type: "plan", description: "phases", content: original, dependsOn: [] });
+  await setArtifactStatus(await loadManifest(taskDir), "plan", "in-review", taskDir);
+  await setArtifactStatus(await loadManifest(taskDir), "plan", "approved", taskDir);
+  await recordPhaseCommit(taskDir, "Phase 1: Build it", "run-1", "a".repeat(40));
+  const marked = original.replace("## Phase 1: Build it", "## ✅ Phase 1: Build it");
+  const verified = await updateArtifact(taskDir, "plan", marked);
+  assert.equal(verified.artifact.status, "approved");
+  assert.deepEqual(verified.invalidatedArtifactIds, []);
+  const checkboxChange = await updateArtifact(taskDir, "plan", marked.replace("- [ ]", "- [x]"));
+  assert.equal(checkboxChange.artifact.status, "draft");
+  await setArtifactStatus(await loadManifest(taskDir), "plan", "in-review", taskDir);
+  await setArtifactStatus(await loadManifest(taskDir), "plan", "approved", taskDir);
+  const removal = await updateArtifact(taskDir, "plan", original.replace("- [ ]", "- [x]"));
+  assert.equal(removal.artifact.status, "draft");
+  await setArtifactStatus(await loadManifest(taskDir), "plan", "in-review", taskDir);
+  await setArtifactStatus(await loadManifest(taskDir), "plan", "approved", taskDir);
+  await updateArtifact(taskDir, "plan", "## Phase 2: No receipt\n");
+  await setArtifactStatus(await loadManifest(taskDir), "plan", "in-review", taskDir);
+  await setArtifactStatus(await loadManifest(taskDir), "plan", "approved", taskDir);
+  const missingReceipt = await updateArtifact(taskDir, "plan", "## ✅ Phase 2: No receipt\n");
+  assert.equal(missingReceipt.artifact.status, "draft");
+  await updateArtifact(taskDir, "plan", "## Phase 1: Duplicate\n\n## Phase 1: Duplicate\n");
+  await setArtifactStatus(await loadManifest(taskDir), "plan", "in-review", taskDir);
+  await setArtifactStatus(await loadManifest(taskDir), "plan", "approved", taskDir);
+  await recordPhaseCommit(taskDir, "Phase 1: Duplicate", "run-duplicate", "d".repeat(40));
+  const duplicate = await updateArtifact(taskDir, "plan", "## ✅ Phase 1: Duplicate\n\n## ✅ Phase 1: Duplicate\n");
+  assert.equal(duplicate.artifact.status, "draft");
   await rm(base, { recursive: true, force: true });
 });
 
@@ -255,7 +398,7 @@ test("setArtifactStatus validates transitions and records receipts", async () =>
     type: "research",
     description: "x",
     content: "",
-  dependsOn: [],
+    dependsOn: [],
   });
   assert.equal(r.artifact.status, "draft");
   // createArtifact loads fresh from disk; reload for status operations.
@@ -285,7 +428,7 @@ test("resolvePrecedence returns chain per flow, excluding research-questions", a
     type: "research-questions",
     description: "qs",
     content: "",
-  dependsOn: [],
+    dependsOn: [],
   });
   let manifest = await loadManifest(taskDir);
   await setArtifactStatus(manifest, "research-questions", "in-review", taskDir);
@@ -424,7 +567,7 @@ test("symlinked task root resolves through the same canonical path", async () =>
     type: "research",
     description: "x",
     content: "through symlink",
-  dependsOn: [],
+    dependsOn: [],
   });
   assert.equal(created.manifest.artifacts.length, 1);
   const onDisk = await loadManifest(taskDir);
@@ -472,9 +615,18 @@ test("loadManifest rejects malformed schema-v1 fields without silently accepting
     { value: { ...manifest, artifacts: [{ ...artifact, contentHash: "not-a-sha256" }] }, error: /contentHash/ },
     { value: { ...manifest, artifacts: [{ ...artifact, updatedAt: "not-a-timestamp" }] }, error: /updatedAt/ },
     { value: { ...manifest, artifacts: [{ ...artifact, dependsOn: ["missing"] }] }, error: /unknown dependency/ },
-    { value: { ...manifest, artifacts: [artifact, { ...artifact, id: "research-v2", path: "02-research.md" }] }, error: /duplicate active artifact type/ },
-    { value: { ...manifest, receipts: [{ kind: "unknown", timestamp: "2026-01-01T00:00:00.000Z" }] }, error: /receipt.*kind/ },
-    { value: { ...manifest, receipts: [{ kind: "drift", timestamp: "2026-01-01T00:00:00.000Z", extra: true }] }, error: /extra/ },
+    {
+      value: { ...manifest, artifacts: [artifact, { ...artifact, id: "research-v2", path: "02-research.md" }] },
+      error: /duplicate active artifact type/,
+    },
+    {
+      value: { ...manifest, receipts: [{ kind: "unknown", timestamp: "2026-01-01T00:00:00.000Z" }] },
+      error: /receipt.*kind/,
+    },
+    {
+      value: { ...manifest, receipts: [{ kind: "drift", timestamp: "2026-01-01T00:00:00.000Z", extra: true }] },
+      error: /extra/,
+    },
   ];
   for (const invalid of invalidCases) {
     await writeFile(join(taskDir, "artifact-manifest.json"), JSON.stringify(invalid.value), "utf8");
@@ -488,7 +640,12 @@ test("updateArtifact and openTask reject artifact symlinks outside a canonical t
   const realRoot = await mkdtemp(join(tmpdir(), "rpi-real-root-"));
   await createTask(base, { slug: "safe-links", title: "Links", flow: "freeform", baseBranch: "main" });
   const originalTaskDir = join(base, "safe-links");
-  const created = await createArtifact(originalTaskDir, { type: "research", description: "r", content: "inside", dependsOn: [] });
+  const created = await createArtifact(originalTaskDir, {
+    type: "research",
+    description: "r",
+    content: "inside",
+    dependsOn: [],
+  });
   const outside = join(base, "outside.md");
   await writeFile(outside, "outside");
   await unlink(join(originalTaskDir, created.artifact.path));
@@ -530,7 +687,15 @@ test("manifest parsing accepts artifact version v10", async () => {
   await createTask(base, { slug: "version-ten", title: "Version", flow: "rpi", baseBranch: "main" });
   const taskDir = join(base, "version-ten");
   const manifest = await loadManifest(taskDir);
-  manifest.artifacts.push({ id: "research-v10", type: "research", path: "10-research.md", status: "draft", dependsOn: [], contentHash: "a".repeat(64), updatedAt: "2026-01-01T00:00:00.000Z" });
+  manifest.artifacts.push({
+    id: "research-v10",
+    type: "research",
+    path: "10-research.md",
+    status: "draft",
+    dependsOn: [],
+    contentHash: "a".repeat(64),
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
   await writeFile(join(taskDir, "artifact-manifest.json"), JSON.stringify(manifest), "utf8");
   assert.equal((await loadManifest(taskDir)).artifacts[0]?.id, "research-v10");
   await rm(base, { recursive: true, force: true });
@@ -554,12 +719,19 @@ test("cross-process artifact creates preserve both manifest updates and recover 
   const base = await mkTmp();
   await createTask(base, { slug: "process-lock", title: "Process", flow: "freeform", baseBranch: "main" });
   const taskDir = join(base, "process-lock");
-  await writeFile(join(taskDir, ".artifact-manifest.lock"), JSON.stringify({ owner: "dead", pid: 999_999_999, createdAt: 0 }), "utf8");
+  await writeFile(
+    join(taskDir, ".artifact-manifest.lock"),
+    JSON.stringify({ owner: "dead", pid: 999_999_999, createdAt: 0 }),
+    "utf8",
+  );
   const engineUrl = pathToFileURL(join(process.cwd(), "src/engine/engine.ts")).href;
-  const child = (type: string, description: string) => execFile(process.execPath, [
-    "--experimental-strip-types", "--input-type=module", "--eval",
-    `const { createArtifact } = await import(${JSON.stringify(engineUrl)}); await createArtifact(${JSON.stringify(taskDir)}, { type: ${JSON.stringify(type)}, description: ${JSON.stringify(description)}, content: "child", dependsOn: [] });`,
-  ]);
+  const child = (type: string, description: string) =>
+    execFile(process.execPath, [
+      "--experimental-strip-types",
+      "--input-type=module",
+      "--eval",
+      `const { createArtifact } = await import(${JSON.stringify(engineUrl)}); await createArtifact(${JSON.stringify(taskDir)}, { type: ${JSON.stringify(type)}, description: ${JSON.stringify(description)}, content: "child", dependsOn: [] });`,
+    ]);
   await Promise.all([child("research-questions", "questions"), child("research", "research")]);
   assert.equal((await loadManifest(taskDir)).artifacts.length, 2);
   await rm(base, { recursive: true, force: true });
@@ -567,7 +739,12 @@ test("cross-process artifact creates preserve both manifest updates and recover 
 
 test("setBaseBranch persists the selected ref, records a receipt, and preserves fresh task state", async () => {
   const base = await mkTmp();
-  const manifest = await createTask(base, { slug: "base-branch", title: "Base branch", flow: "freeform", baseBranch: "main" });
+  const manifest = await createTask(base, {
+    slug: "base-branch",
+    title: "Base branch",
+    flow: "freeform",
+    baseBranch: "main",
+  });
   const taskDir = join(base, manifest.slug);
   const staleManifest = await loadManifest(taskDir);
   await createArtifact(taskDir, { type: "mockup", description: "mockup", content: "m", dependsOn: [] });
@@ -579,7 +756,11 @@ test("setBaseBranch persists the selected ref, records a receipt, and preserves 
   assert.equal(onDisk.baseBranch, "origin/release");
   assert.equal(onDisk.artifacts.length, 1);
   assert.equal(onDisk.artifacts[0]?.id, "mockup");
-  assert.ok(onDisk.receipts.some((receipt) => receipt.kind === "base-branch-change" && receipt.detail === "main -> origin/release"));
+  assert.ok(
+    onDisk.receipts.some(
+      (receipt) => receipt.kind === "base-branch-change" && receipt.detail === "main -> origin/release",
+    ),
+  );
   await assert.rejects(setBaseBranch(updated, "", taskDir), /Base branch must not be empty/);
   await rm(base, { recursive: true, force: true });
 });
@@ -611,14 +792,40 @@ test("supersession accepts only the active approved artifact of the same type", 
   await setArtifactStatus(manifest, "research", "in-review", taskDir);
   manifest = await setArtifactStatus(manifest, "research", "approved", taskDir);
   await createArtifact(taskDir, { type: "design-discussion", description: "design", content: "d", dependsOn: [] });
-  await assert.rejects(createArtifact(taskDir, { type: "research", description: "wrong", content: "r2", dependsOn: [], supersedes: "design-discussion" }), /expected "research"/);
-  const replacement = await createArtifact(taskDir, { type: "research", description: "research-v2", content: "r2", dependsOn: [], supersedes: "research" });
+  await assert.rejects(
+    createArtifact(taskDir, {
+      type: "research",
+      description: "wrong",
+      content: "r2",
+      dependsOn: [],
+      supersedes: "design-discussion",
+    }),
+    /expected "research"/,
+  );
+  const replacement = await createArtifact(taskDir, {
+    type: "research",
+    description: "research-v2",
+    content: "r2",
+    dependsOn: [],
+    supersedes: "research",
+  });
   manifest = await loadManifest(taskDir);
   await setArtifactStatus(manifest, replacement.artifact.id, "in-review", taskDir);
   manifest = await setArtifactStatus(manifest, replacement.artifact.id, "approved", taskDir);
-  const logicalReplacement = await createArtifact(taskDir, { type: "research", description: "research-v3", content: "r3", dependsOn: [], supersedes: "research" });
+  const logicalReplacement = await createArtifact(taskDir, {
+    type: "research",
+    description: "research-v3",
+    content: "r3",
+    dependsOn: [],
+    supersedes: "research",
+  });
   assert.equal(logicalReplacement.artifact.id, "research-v3");
-  assert.equal((await loadManifest(taskDir)).artifacts.filter((artifact) => artifact.type === "research" && artifact.status !== "superseded").length, 1);
+  assert.equal(
+    (await loadManifest(taskDir)).artifacts.filter(
+      (artifact) => artifact.type === "research" && artifact.status !== "superseded",
+    ).length,
+    1,
+  );
   await rm(base, { recursive: true, force: true });
 });
 
@@ -650,10 +857,21 @@ test("changeFlow ignores superseded history but blocks active incompatible artif
 
 test("pr-walkthrough accepts implementation input and remains supporting material across flows", async () => {
   const base = await mkTmp();
-  await createTask(base, { slug: "flow-walkthrough", title: "Flow", flow: "oneshot", baseBranch: "main", ticketBody: "ticket" });
+  await createTask(base, {
+    slug: "flow-walkthrough",
+    title: "Flow",
+    flow: "oneshot",
+    baseBranch: "main",
+    ticketBody: "ticket",
+  });
   const taskDir = join(base, "flow-walkthrough");
   let manifest = await loadManifest(taskDir);
-  await createArtifact(taskDir, { type: "implementation", description: "implementation", content: "i", dependsOn: ["ticket"] });
+  await createArtifact(taskDir, {
+    type: "implementation",
+    description: "implementation",
+    content: "i",
+    dependsOn: ["ticket"],
+  });
   manifest = await loadManifest(taskDir);
   await setArtifactStatus(manifest, "implementation", "in-review", taskDir);
   manifest = await setArtifactStatus(manifest, "implementation", "approved", taskDir);
@@ -670,7 +888,13 @@ test("pr-walkthrough accepts implementation input and remains supporting materia
 
 test("ticket and supporting artifacts do not block rpi to prd flow changes", async () => {
   const base = await mkTmp();
-  await createTask(base, { slug: "flow-support", title: "Flow", flow: "rpi", baseBranch: "main", ticketBody: "ticket" });
+  await createTask(base, {
+    slug: "flow-support",
+    title: "Flow",
+    flow: "rpi",
+    baseBranch: "main",
+    ticketBody: "ticket",
+  });
   const taskDir = join(base, "flow-support");
   await createArtifact(taskDir, { type: "mockup", description: "mockup", content: "m", dependsOn: [] });
   await createArtifact(taskDir, { type: "diagram", description: "diagram", content: "d", dependsOn: [] });
@@ -682,7 +906,11 @@ test("legacy migration saves once and later opens do not add migration receipts"
   const base = await mkTmp();
   const taskDir = join(base, "migrate-once");
   await mkdir(taskDir, { recursive: true });
-  await writeFile(join(taskDir, "artifact-manifest.json"), JSON.stringify({ slug: "migrate-once", title: "Legacy", artifacts: [] }), "utf8");
+  await writeFile(
+    join(taskDir, "artifact-manifest.json"),
+    JSON.stringify({ slug: "migrate-once", title: "Legacy", artifacts: [] }),
+    "utf8",
+  );
   const first = await openTask(base, "migrate-once");
   const firstOnDisk = await readFile(join(taskDir, "artifact-manifest.json"), "utf8");
   const second = await openTask(base, "migrate-once");

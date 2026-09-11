@@ -7,7 +7,14 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import artifactsExtension, { gitAddBlockReason } from "../../extensions/artifacts.ts";
-import { createArtifact, createTask, loadManifest, setArtifactStatus, suggestTaskActions, updateArtifact } from "../../src/engine/index.ts";
+import {
+  createArtifact,
+  createTask,
+  loadManifest,
+  setArtifactStatus,
+  suggestTaskActions,
+  updateArtifact,
+} from "../../src/engine/index.ts";
 
 const cwd = "/tmp/rpi-stage-guard";
 const execFileAsync = promisify(execFile);
@@ -15,14 +22,24 @@ const execFileAsync = promisify(execFile);
 test("active task context is added to the current turn's system prompt", async () => {
   const project = await tempProject();
   const root = join(project, ".pi", "artifacts");
-  const task = await createTask(root, { slug: "system-prompt-task", title: "System prompt task", flow: "rpi", baseBranch: "main" });
-  const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } } }];
+  const task = await createTask(root, {
+    slug: "system-prompt-task",
+    title: "System prompt task",
+    flow: "rpi",
+    baseBranch: "main",
+  });
+  const branch = [
+    {
+      type: "message",
+      message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } },
+    },
+  ];
   const extension = fakeExtensionApi(branch);
   try {
-    const result = await extension.eventHandlers.get("before_agent_start")!(
+    const result = (await extension.eventHandlers.get("before_agent_start")!(
       { systemPrompt: "Base prompt" },
       extension.context(project),
-    ) as { systemPrompt: string };
+    )) as { systemPrompt: string };
 
     assert.match(result.systemPrompt, /^Base prompt/);
     assert.match(result.systemPrompt, /Active task: system-prompt-task/);
@@ -43,8 +60,13 @@ test("a missing persisted task is not added to the system prompt", async () => {
     );
 
     assert.equal(result, undefined);
-    assert.deepEqual(extension.notifications, ["Selected task \"gone-task\" is unavailable. Select another task with /rpi-task."]);
-    await assert.rejects(invoke(extension.tools.get("rpi_list_artifacts")!, {}, extension.context(project)), /No task selected/);
+    assert.deepEqual(extension.notifications, [
+      'Selected task "gone-task" is unavailable. Select another task with /rpi-task.',
+    ]);
+    await assert.rejects(
+      invoke(extension.tools.get("rpi_list_artifacts")!, {}, extension.context(project)),
+      /No task selected/,
+    );
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -53,17 +75,46 @@ test("a missing persisted task is not added to the system prompt", async () => {
 test("explicit task context reports detailed suggestions and a concise footer without an editor widget", async () => {
   const project = await tempProject();
   const root = join(project, ".pi", "artifacts");
-  const task = await createTask(root, { slug: "parent-child-tracking", title: "Parent-child tracking", flow: "rpi", baseBranch: "main" });
+  const task = await createTask(root, {
+    slug: "parent-child-tracking",
+    title: "Parent-child tracking",
+    flow: "rpi",
+    baseBranch: "main",
+  });
   const taskDir = join(root, task.slug);
   try {
-    await createArtifact(taskDir, { type: "research-questions", description: "questions", content: "q", dependsOn: [] });
+    await createArtifact(taskDir, {
+      type: "research-questions",
+      description: "questions",
+      content: "q",
+      dependsOn: [],
+    });
     await setArtifactStatus(await loadManifest(taskDir), "research-questions", "in-review", taskDir);
     await setArtifactStatus(await loadManifest(taskDir), "research-questions", "approved", taskDir);
-    await createArtifact(taskDir, { type: "research", description: "codebase", content: "r", dependsOn: ["research-questions"], status: "in-review" });
-    await createArtifact(taskDir, { type: "mockup", description: "screen", content: "m", dependsOn: [], status: "in-review" });
-    const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } } }];
+    await createArtifact(taskDir, {
+      type: "research",
+      description: "codebase",
+      content: "r",
+      dependsOn: ["research-questions"],
+      status: "in-review",
+    });
+    await createArtifact(taskDir, {
+      type: "mockup",
+      description: "screen",
+      content: "m",
+      dependsOn: [],
+      status: "in-review",
+    });
+    const branch = [
+      {
+        type: "message",
+        message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } },
+      },
+    ];
     const { context, statuses, tools, widgets } = fakeExtensionApi(branch);
-    const result = await invoke(tools.get("rpi_get_task_context")!, { slug: task.slug }, context(project)) as { content: Array<{ text: string }> };
+    const result = (await invoke(tools.get("rpi_get_task_context")!, { slug: task.slug }, context(project))) as {
+      content: Array<{ text: string }>;
+    };
 
     assert.equal(statuses.at(-1), "parent-child-tracking · rpi · actions: review research for approval · 2 in review");
     assert.match(result.content[0]!.text, /"suggestedActions": \[/);
@@ -77,18 +128,82 @@ test("explicit task context reports detailed suggestions and a concise footer wi
 test("artifact status changes refresh the active task footer", async () => {
   const project = await tempProject();
   const root = join(project, ".pi", "artifacts");
-  const task = await createTask(root, { slug: "footer-refresh", title: "Footer refresh", flow: "rpi", baseBranch: "main" });
+  const task = await createTask(root, {
+    slug: "footer-refresh",
+    title: "Footer refresh",
+    flow: "rpi",
+    baseBranch: "main",
+  });
   const taskDir = join(root, task.slug);
   try {
-    await createArtifact(taskDir, { type: "research-questions", description: "questions", content: "q", dependsOn: [] });
+    await createArtifact(taskDir, {
+      type: "research-questions",
+      description: "questions",
+      content: "q",
+      dependsOn: [],
+    });
     await setArtifactStatus(await loadManifest(taskDir), "research-questions", "in-review", taskDir);
-    const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } } }];
+    const branch = [
+      {
+        type: "message",
+        message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } },
+      },
+    ];
     const { context, statuses, tools, widgets } = fakeExtensionApi(branch);
 
-    await invoke(tools.get("rpi_set_artifact_status")!, { artifactId: "research-questions", status: "approved" }, context(project));
+    await invoke(
+      tools.get("rpi_set_artifact_status")!,
+      { artifactId: "research-questions", status: "approved" },
+      context(project),
+    );
 
-    assert.equal(statuses.at(-1), "footer-refresh · rpi · actions: create research, create mockup (optional) · 0 in review");
+    assert.equal(
+      statuses.at(-1),
+      "footer-refresh · rpi · actions: create research, create mockup (optional) · 0 in review",
+    );
     assert.deepEqual(widgets, []);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+});
+
+test("artifact updates report invalidated approvals and refresh the active task footer", async () => {
+  const project = await tempProject();
+  const root = join(project, ".pi", "artifacts");
+  const task = await createTask(root, {
+    slug: "update-integrity",
+    title: "Update integrity",
+    flow: "freeform",
+    baseBranch: "main",
+  });
+  const taskDir = join(root, task.slug);
+  try {
+    await createArtifact(taskDir, { type: "research", description: "source", content: "old", dependsOn: [] });
+    await setArtifactStatus(await loadManifest(taskDir), "research", "in-review", taskDir);
+    await setArtifactStatus(await loadManifest(taskDir), "research", "approved", taskDir);
+    await createArtifact(taskDir, { type: "plan", description: "dependent", content: "plan", dependsOn: ["research"] });
+    await setArtifactStatus(await loadManifest(taskDir), "plan", "in-review", taskDir);
+    await setArtifactStatus(await loadManifest(taskDir), "plan", "approved", taskDir);
+    const branch = [
+      {
+        type: "message",
+        message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } },
+      },
+    ];
+    const { context, statuses, tools } = fakeExtensionApi(branch);
+
+    const result = (await invoke(
+      tools.get("rpi_update_artifact")!,
+      { artifactId: "research", content: "changed" },
+      context(project),
+    )) as {
+      content: Array<{ text: string }>;
+      details: { invalidatedArtifactIds: string[] };
+    };
+
+    assert.match(result.content[0]!.text, /Invalidated to draft: research, plan/);
+    assert.deepEqual(result.details.invalidatedArtifactIds, ["research", "plan"]);
+    assert.equal(statuses.at(-1), "update-integrity · freeform · actions: iterate research · 0 in review");
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -108,13 +223,15 @@ test("rpi-init creates the default workspace config, ignores local state, and pr
       disabled: false,
       pathTemplate: "~/.pi/workspaces/{{ TASKSLUG }}/{{ REPOBASENAME }}",
       branchTemplate: "{{ TASKSLUG }}",
-      repos: [{
-        localPath: ".",
-        primary: true,
-        sourceRef: "origin/main",
-        setupCommand: "",
-        copyGlobs: [".env*", ".pi/settings.json", ".pi/workspace.local.json"],
-      }],
+      repos: [
+        {
+          localPath: ".",
+          primary: true,
+          sourceRef: "origin/main",
+          setupCommand: "",
+          copyGlobs: [".env*", ".pi/settings.json", ".pi/workspace.local.json"],
+        },
+      ],
     });
     const initialIgnore = await readFile(join(project, ".gitignore"), "utf8");
     assert.ok(initialIgnore.split("\n").includes(".pi/artifacts"));
@@ -165,10 +282,10 @@ test("persisted selection restores the active task footer without a visible cont
     const restored = fakeExtensionApi(initial.appendedEntries);
     await restored.eventHandlers.get("session_start")!({}, restored.context(project));
     await invoke(restored.tools.get("rpi_list_artifacts")!, {}, restored.context(project));
-    const systemPrompt = await restored.eventHandlers.get("before_agent_start")!(
+    const systemPrompt = (await restored.eventHandlers.get("before_agent_start")!(
       { systemPrompt: "Base prompt" },
       restored.context(project),
-    ) as { systemPrompt: string };
+    )) as { systemPrompt: string };
     assert.ok(restored.statuses.some((status) => status?.startsWith("restored-task · rpi") === true));
     assert.match(systemPrompt.systemPrompt, /Active task: restored-task/);
     assert.deepEqual(restored.appendedEntries, []);
@@ -197,17 +314,40 @@ test("tree navigation clears the footer when the destination has no selected tas
 test("artifact reads report line and multibyte byte truncation", async () => {
   const project = await tempProject();
   const root = join(project, ".pi", "artifacts");
-  const task = await createTask(root, { slug: "truncated-read", title: "Truncated", flow: "freeform", baseBranch: "main" });
+  const task = await createTask(root, {
+    slug: "truncated-read",
+    title: "Truncated",
+    flow: "freeform",
+    baseBranch: "main",
+  });
   const directory = join(root, task.slug);
   try {
-    await createArtifact(directory, { type: "research", description: "content", content: Array.from({ length: 2001 }, () => "x").join("\n"), dependsOn: [] });
-    const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } } }];
+    await createArtifact(directory, {
+      type: "research",
+      description: "content",
+      content: Array.from({ length: 2001 }, () => "x").join("\n"),
+      dependsOn: [],
+    });
+    const branch = [
+      {
+        type: "message",
+        message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } },
+      },
+    ];
     const extension = fakeExtensionApi(branch);
-    const first = await invoke(extension.tools.get("rpi_read_artifact")!, { artifactId: "research" }, extension.context(project)) as { content: Array<{ text: string }> };
+    const first = (await invoke(
+      extension.tools.get("rpi_read_artifact")!,
+      { artifactId: "research" },
+      extension.context(project),
+    )) as { content: Array<{ text: string }> };
     assert.match(first.content[0]!.text, /lines 2000 of 2001; bytes/);
     assert.match(first.content[0]!.text, new RegExp(`Full output: ${join(directory, "01-research-content.md")}`));
     await writeFile(join(directory, "01-research-content.md"), "é".repeat(30_000), "utf8");
-    const second = await invoke(extension.tools.get("rpi_read_artifact")!, { artifactId: "research" }, extension.context(project)) as { content: Array<{ text: string }> };
+    const second = (await invoke(
+      extension.tools.get("rpi_read_artifact")!,
+      { artifactId: "research" },
+      extension.context(project),
+    )) as { content: Array<{ text: string }> };
     assert.match(second.content[0]!.text, /lines 0 of 1; bytes 0B of/);
     assert.match(second.content[0]!.text, new RegExp(`Full output: ${join(directory, "01-research-content.md")}`));
   } finally {
@@ -226,12 +366,20 @@ test("rpi_git_diff preserves truncated output and returns its path", async () =>
     await runGit(project, ["add", "tracked.txt"]);
     await runGit(project, ["commit", "-m", "base"]);
     const { stdout: baseRef } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: project });
-    await writeFile(join(project, "tracked.txt"), Array.from({ length: 2_100 }, () => "changed line").join("\n"), "utf8");
+    await writeFile(
+      join(project, "tracked.txt"),
+      Array.from({ length: 2_100 }, () => "changed line").join("\n"),
+      "utf8",
+    );
     await runGit(project, ["add", "tracked.txt"]);
     await runGit(project, ["commit", "-m", "large diff"]);
 
     const extension = fakeExtensionApi();
-    const result = await invoke(extension.tools.get("rpi_git_diff")!, { baseRef: baseRef.trim() }, extension.context(project)) as {
+    const result = (await invoke(
+      extension.tools.get("rpi_git_diff")!,
+      { baseRef: baseRef.trim() },
+      extension.context(project),
+    )) as {
       content: Array<{ text: string }>;
       details: { fullOutputPath?: string };
     };
@@ -257,7 +405,12 @@ test("rpi-annotate guides the user without launching Plannotator when no task is
 
 test("rpi-annotate sends annotated feedback to the active agent", async () => {
   const project = "/tmp/rpi-annotate-active";
-  const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: "review-me" } } }];
+  const branch = [
+    {
+      type: "message",
+      message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: "review-me" } },
+    },
+  ];
   const { commands, context, notifications, processCalls, sentUserMessageOptions, sentUserMessages } = fakeExtensionApi(
     branch,
     { stdout: '{"decision":"annotated","feedback":"Clarify the task scope."}', stderr: "", code: 0, killed: false },
@@ -265,7 +418,9 @@ test("rpi-annotate sends annotated feedback to the active agent", async () => {
 
   await commands.get("rpi-annotate")!.handler("", context(project));
 
-  assert.deepEqual(processCalls, [{ command: "plannotator", args: ["annotate", join(project, ".pi", "artifacts", "review-me"), "--json"] }]);
+  assert.deepEqual(processCalls, [
+    { command: "plannotator", args: ["annotate", join(project, ".pi", "artifacts", "review-me"), "--json"] },
+  ]);
   assert.deepEqual(notifications, ["Plannotator feedback queued."]);
   assert.equal(sentUserMessages.length, 1);
   assert.match(sentUserMessages[0]!, /RPI Artifact Annotations/);
@@ -276,11 +431,18 @@ test("rpi-annotate sends annotated feedback to the active agent", async () => {
 });
 
 test("rpi-annotate sends approved annotation notes to the active agent", async () => {
-  const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: "review-me" } } }];
-  const { commands, context, sentUserMessageOptions, sentUserMessages } = fakeExtensionApi(
-    branch,
-    { stdout: '{"decision":"approved","feedback":"Add acceptance criteria."}', stderr: "", code: 0, killed: false },
-  );
+  const branch = [
+    {
+      type: "message",
+      message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: "review-me" } },
+    },
+  ];
+  const { commands, context, sentUserMessageOptions, sentUserMessages } = fakeExtensionApi(branch, {
+    stdout: '{"decision":"approved","feedback":"Add acceptance criteria."}',
+    stderr: "",
+    code: 0,
+    killed: false,
+  });
 
   await commands.get("rpi-annotate")!.handler("", context("/tmp/rpi-annotate-approved-notes"));
 
@@ -290,7 +452,12 @@ test("rpi-annotate sends approved annotation notes to the active agent", async (
 });
 
 test("rpi-annotate does not send approved, dismissed, or malformed results to the active agent", async () => {
-  const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: "review-me" } } }];
+  const branch = [
+    {
+      type: "message",
+      message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: "review-me" } },
+    },
+  ];
   const cases: Array<[string, string]> = [
     ['{"decision":"approved","feedback":""}', "Plannotator annotation approved."],
     ['{"decision":"dismissed","feedback":"Ignored note"}', "Plannotator annotation dismissed."],
@@ -298,7 +465,12 @@ test("rpi-annotate does not send approved, dismissed, or malformed results to th
     ["not json", "Plannotator returned invalid annotation data."],
   ];
   for (const [stdout, notification] of cases) {
-    const { commands, context, notifications, sentUserMessages } = fakeExtensionApi(branch, { stdout, stderr: "", code: 0, killed: false });
+    const { commands, context, notifications, sentUserMessages } = fakeExtensionApi(branch, {
+      stdout,
+      stderr: "",
+      code: 0,
+      killed: false,
+    });
 
     await commands.get("rpi-annotate")!.handler("", context("/tmp/rpi-annotate-no-feedback"));
 
@@ -308,11 +480,18 @@ test("rpi-annotate does not send approved, dismissed, or malformed results to th
 });
 
 test("rpi-annotate reports Plannotator process failures without throwing", async () => {
-  const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: "review-me" } } }];
-  const { commands, context, notifications } = fakeExtensionApi(
-    branch,
-    { stdout: "", stderr: "Plannotator did not start.", code: 1, killed: false },
-  );
+  const branch = [
+    {
+      type: "message",
+      message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: "review-me" } },
+    },
+  ];
+  const { commands, context, notifications } = fakeExtensionApi(branch, {
+    stdout: "",
+    stderr: "Plannotator did not start.",
+    code: 1,
+    killed: false,
+  });
 
   await commands.get("rpi-annotate")!.handler("", context("/tmp/rpi-annotate-failure"));
 
@@ -321,14 +500,23 @@ test("rpi-annotate reports Plannotator process failures without throwing", async
 
 test("rpi-new uses descriptive flows and sends a hidden task instruction", async () => {
   const label = "PRD — research, requirements, tests, then implementation";
-  const { commands, context, selectionCalls, sentMessages, sentUserMessages } = fakeExtensionApi([], undefined, [label]);
+  const { commands, context, selectionCalls, sentMessages, sentUserMessages } = fakeExtensionApi([], undefined, [
+    label,
+  ]);
 
   await commands.get("rpi-new")!.handler("Track parent-child projects", context("/tmp/rpi-new"));
 
-  assert.deepEqual(selectionCalls, [{ title: "Select task flow:", options: [
-    "RPI — research, design, outline, then implementation", label,
-    "One-shot — ticket directly to implementation", "Freeform — no enforced artifact chain",
-  ] }]);
+  assert.deepEqual(selectionCalls, [
+    {
+      title: "Select task flow:",
+      options: [
+        "RPI — research, design, outline, then implementation",
+        label,
+        "One-shot — ticket directly to implementation",
+        "Freeform — no enforced artifact chain",
+      ],
+    },
+  ]);
   assert.deepEqual(sentUserMessages, []);
   assert.equal(sentMessages.length, 1);
   assert.equal(sentMessages[0]!.message.display, false);
@@ -363,7 +551,9 @@ test("rpi-task selects an existing task from the picker and does not create miss
     const suggestions = suggestTaskActions(await loadManifest(join(root, task.slug)));
     assert.equal(suggestions.length, 3);
     await commands.get("rpi-task")!.handler("", context(project));
-    assert.ok(statuses.includes("pick-me · rpi · actions: create research-questions, create mockup (optional) · 0 in review"));
+    assert.ok(
+      statuses.includes("pick-me · rpi · actions: create research-questions, create mockup (optional) · 0 in review"),
+    );
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -374,7 +564,7 @@ test("rpi-task reports missing tasks instead of creating them", async () => {
   const { commands, context, notifications } = fakeExtensionApi();
   try {
     await commands.get("rpi-task")!.handler("missing", context(project));
-    assert.deepEqual(notifications, ["Task \"missing\" was not found. Use /rpi-new."]);
+    assert.deepEqual(notifications, ['Task "missing" was not found. Use /rpi-new.']);
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -393,7 +583,12 @@ test("rpi-change-base handles Git failures and empty branch lists without changi
   const project = await tempProject();
   const root = join(project, ".pi", "artifacts");
   await createTask(root, { slug: "base-task", title: "Base task", flow: "rpi", baseBranch: "main" });
-  const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: "base-task" } } }];
+  const branch = [
+    {
+      type: "message",
+      message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: "base-task" } },
+    },
+  ];
   try {
     const failed = fakeExtensionApi(branch, { stdout: "", stderr: "not a repo", code: 1, killed: false });
     await failed.commands.get("rpi-change-base")!.handler("", failed.context(project));
@@ -412,8 +607,18 @@ test("rpi-change-base leaves the active task unchanged when its picker is cancel
   const project = await tempProject();
   const root = join(project, ".pi", "artifacts");
   await createTask(root, { slug: "base-task", title: "Base task", flow: "rpi", baseBranch: "main" });
-  const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: "base-task" } } }];
-  const { commands, context } = fakeExtensionApi(branch, { stdout: "origin/main\nmain\n", stderr: "", code: 0, killed: false });
+  const branch = [
+    {
+      type: "message",
+      message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: "base-task" } },
+    },
+  ];
+  const { commands, context } = fakeExtensionApi(branch, {
+    stdout: "origin/main\nmain\n",
+    stderr: "",
+    code: 0,
+    killed: false,
+  });
   try {
     await commands.get("rpi-change-base")!.handler("", context(project));
     assert.equal((await loadManifest(join(root, "base-task"))).baseBranch, "main");
@@ -426,7 +631,12 @@ test("rpi-change-base persists the selected Git branch", async () => {
   const project = await tempProject();
   const root = join(project, ".pi", "artifacts");
   await createTask(root, { slug: "base-task", title: "Base task", flow: "rpi", baseBranch: "main" });
-  const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: "base-task" } } }];
+  const branch = [
+    {
+      type: "message",
+      message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: "base-task" } },
+    },
+  ];
   const { commands, context, notifications, processCalls } = fakeExtensionApi(
     branch,
     { stdout: "origin/HEAD\norigin/main\nmain\norigin/main\n", stderr: "", code: 0, killed: false },
@@ -434,11 +644,13 @@ test("rpi-change-base persists the selected Git branch", async () => {
   );
   try {
     await commands.get("rpi-change-base")!.handler("", context(project));
-    assert.deepEqual(processCalls, [{
-      command: "git",
-      args: ["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes/origin"],
-      options: { cwd: project },
-    }]);
+    assert.deepEqual(processCalls, [
+      {
+        command: "git",
+        args: ["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes/origin"],
+        options: { cwd: project },
+      },
+    ]);
     assert.deepEqual(notifications, ["Base branch: origin/main"]);
     assert.equal((await loadManifest(join(root, "base-task"))).baseBranch, "origin/main");
   } finally {
@@ -453,11 +665,19 @@ test("rpi-approve selects and approves an in-review artifact", async () => {
   const taskDir = join(root, task.slug);
   await createArtifact(taskDir, { type: "research-questions", description: "questions", content: "q", dependsOn: [] });
   await setArtifactStatus(await loadManifest(taskDir), "research-questions", "in-review", taskDir);
-  const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } } }];
+  const branch = [
+    {
+      type: "message",
+      message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } },
+    },
+  ];
   const { commands, context, notifications } = fakeExtensionApi(branch, undefined, ["research-questions"]);
   try {
     await commands.get("rpi-approve")!.handler("", context(project));
-    assert.equal((await loadManifest(taskDir)).artifacts.find((artifact) => artifact.id === "research-questions")?.status, "approved");
+    assert.equal(
+      (await loadManifest(taskDir)).artifacts.find((artifact) => artifact.id === "research-questions")?.status,
+      "approved",
+    );
     assert.deepEqual(notifications, ["research-questions -> approved"]);
   } finally {
     await rm(project, { recursive: true, force: true });
@@ -471,11 +691,19 @@ test("rpi-approve leaves an in-review artifact unchanged when its picker is canc
   const taskDir = join(root, task.slug);
   await createArtifact(taskDir, { type: "research-questions", description: "questions", content: "q", dependsOn: [] });
   await setArtifactStatus(await loadManifest(taskDir), "research-questions", "in-review", taskDir);
-  const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } } }];
+  const branch = [
+    {
+      type: "message",
+      message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } },
+    },
+  ];
   const { commands, context } = fakeExtensionApi(branch);
   try {
     await commands.get("rpi-approve")!.handler("", context(project));
-    assert.equal((await loadManifest(taskDir)).artifacts.find((artifact) => artifact.id === "research-questions")?.status, "in-review");
+    assert.equal(
+      (await loadManifest(taskDir)).artifacts.find((artifact) => artifact.id === "research-questions")?.status,
+      "in-review",
+    );
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -490,7 +718,31 @@ test("rpi-approve reports when no active task is selected", async () => {
 });
 
 test("git add guard blocks broad, artifact, chained, and indirect staging without blocking prose or explicit source paths", () => {
-  for (const command of ["git add .", "git add -- .", "git -C . add .", "git add -A", "git add --all", "git add -u", "git add --update", "git add :/", "git add '*.ts'", "git add .pi/artifacts/task/file.md", "git -C . add .pi/artifacts/task/file.md", "git add --pathspec-from-file=paths", "git add $PATHS", "git add src/a.ts && git add .", "command git add src/a.ts", "env GIT_OPTIONAL_LOCKS=0 git add src/a.ts", "sh -c 'git add src/a.ts'", "$GIT add src/a.ts", '"$GIT" add src/a.ts', "'${GIT}' add src/a.ts", "/usr/bin/git add .", 'echo "example"; git add .', "git -C sub add ../.pi/artifacts/x"]) {
+  for (const command of [
+    "git add .",
+    "git add -- .",
+    "git -C . add .",
+    "git add -A",
+    "git add --all",
+    "git add -u",
+    "git add --update",
+    "git add :/",
+    "git add '*.ts'",
+    "git add .pi/artifacts/task/file.md",
+    "git -C . add .pi/artifacts/task/file.md",
+    "git add --pathspec-from-file=paths",
+    "git add $PATHS",
+    "git add src/a.ts && git add .",
+    "command git add src/a.ts",
+    "env GIT_OPTIONAL_LOCKS=0 git add src/a.ts",
+    "sh -c 'git add src/a.ts'",
+    "$GIT add src/a.ts",
+    '"$GIT" add src/a.ts',
+    "'${GIT}' add src/a.ts",
+    "/usr/bin/git add .",
+    'echo "example"; git add .',
+    "git -C sub add ../.pi/artifacts/x",
+  ]) {
     assert.ok(gitAddBlockReason(command, cwd), command);
   }
   assert.equal(gitAddBlockReason("git add src/a.ts test/a.test.ts", cwd), null);
@@ -504,41 +756,89 @@ test("manifest suggestions respect reviews, dependencies, optional planning, and
   const task = await createTask(root, { slug: "suggestions", title: "Suggestions", flow: "rpi", baseBranch: "main" });
   const taskDir = join(root, task.slug);
   try {
-    await createArtifact(taskDir, { type: "research-questions", description: "questions", content: "q", dependsOn: [] });
-    assert.deepEqual(suggestTaskActions(await loadManifest(taskDir)).map((action) => action.label), ["iterate research-questions"]);
+    await createArtifact(taskDir, {
+      type: "research-questions",
+      description: "questions",
+      content: "q",
+      dependsOn: [],
+    });
+    assert.deepEqual(
+      suggestTaskActions(await loadManifest(taskDir)).map((action) => action.label),
+      ["iterate research-questions"],
+    );
 
     await approveArtifact(taskDir, "research-questions");
     assert.ok(suggestTaskActions(await loadManifest(taskDir)).some((action) => action.label === "create research"));
-    await createArtifact(taskDir, { type: "research", description: "codebase", content: "r", dependsOn: ["research-questions"], status: "in-review" });
+    await createArtifact(taskDir, {
+      type: "research",
+      description: "codebase",
+      content: "r",
+      dependsOn: ["research-questions"],
+      status: "in-review",
+    });
     const reviewSuggestions = suggestTaskActions(await loadManifest(taskDir)).map((action) => action.label);
     assert.equal(reviewSuggestions[0], "review research for approval");
     assert.equal(reviewSuggestions.includes("create design-discussion"), false);
 
     await approveArtifact(taskDir, "research");
-    await createArtifact(taskDir, { type: "design-discussion", description: "design", content: "d", dependsOn: ["research"] });
+    await createArtifact(taskDir, {
+      type: "design-discussion",
+      description: "design",
+      content: "d",
+      dependsOn: ["research"],
+    });
     await approveArtifact(taskDir, "design-discussion");
-    await createArtifact(taskDir, { type: "structure-outline", description: "outline", content: "o", dependsOn: ["design-discussion"] });
+    await createArtifact(taskDir, {
+      type: "structure-outline",
+      description: "outline",
+      content: "o",
+      dependsOn: ["design-discussion"],
+    });
     await approveArtifact(taskDir, "structure-outline");
     const readyToImplement = suggestTaskActions(await loadManifest(taskDir)).map((action) => action.label);
     assert.deepEqual(readyToImplement.slice(0, 2), ["implement outline", "create plan (optional)"]);
     await createArtifact(taskDir, { type: "mockup", description: "screen", content: "m", dependsOn: [] });
     assert.deepEqual(
-      suggestTaskActions(await loadManifest(taskDir)).map((action) => action.label).slice(0, 2),
+      suggestTaskActions(await loadManifest(taskDir))
+        .map((action) => action.label)
+        .slice(0, 2),
       ["implement outline", "iterate mockup"],
     );
-    await createArtifact(taskDir, { type: "plan", description: "plan", content: "p", dependsOn: ["structure-outline"] });
+    await createArtifact(taskDir, {
+      type: "plan",
+      description: "plan",
+      content: "p",
+      dependsOn: ["structure-outline"],
+    });
     await approveArtifact(taskDir, "plan");
     assert.equal(suggestTaskActions(await loadManifest(taskDir))[0]?.label, "implement plan");
 
-
-    await createArtifact(taskDir, { type: "implementation", description: "implemented", content: "i", dependsOn: ["plan"] });
+    await createArtifact(taskDir, {
+      type: "implementation",
+      description: "implemented",
+      content: "i",
+      dependsOn: ["plan"],
+    });
     await approveArtifact(taskDir, "implementation");
-    await createArtifact(taskDir, { type: "pr-description", description: "pull-request", content: "p", dependsOn: ["implementation"] });
+    await createArtifact(taskDir, {
+      type: "pr-description",
+      description: "pull-request",
+      content: "p",
+      dependsOn: ["implementation"],
+    });
     await approveArtifact(taskDir, "pr-description");
     assert.equal(suggestTaskActions(await loadManifest(taskDir))[0]?.label, "workflow complete");
 
-    const freeform = await createTask(root, { slug: "freeform-suggestions", title: "Freeform", flow: "freeform", baseBranch: "main" });
-    assert.deepEqual(suggestTaskActions(await loadManifest(join(root, freeform.slug))).map((action) => action.label), ["choose an artifact that fits the work"]);
+    const freeform = await createTask(root, {
+      slug: "freeform-suggestions",
+      title: "Freeform",
+      flow: "freeform",
+      baseBranch: "main",
+    });
+    assert.deepEqual(
+      suggestTaskActions(await loadManifest(join(root, freeform.slug))).map((action) => action.label),
+      ["choose an artifact that fits the work"],
+    );
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -551,12 +851,20 @@ async function prepareImplementationSource(taskDir: string, sourceType: "plan" |
     ["design-discussion", "approved-design", ["research"]],
     ["structure-outline", "approved-outline", ["design-discussion"]],
   ] as const) {
-    const content = type === "structure-outline" ? "## Phase 1: Implement the phase.\n\nImplement the phase." : `## ${type}\n\nImplement the phase.`;
+    const content =
+      type === "structure-outline"
+        ? "## Phase 1: Implement the phase.\n\nImplement the phase."
+        : `## ${type}\n\nImplement the phase.`;
     await createArtifact(taskDir, { type, description, content, dependsOn: [...dependsOn] });
     await approveArtifact(taskDir, type);
   }
   if (sourceType === "structure-outline") return;
-  await createArtifact(taskDir, { type: "plan", description: "approved-plan", content: "## Phase 1: Implement the phase.\n\nImplement the phase.", dependsOn: ["structure-outline"] });
+  await createArtifact(taskDir, {
+    type: "plan",
+    description: "approved-plan",
+    content: "## Phase 1: Implement the phase.\n\nImplement the phase.",
+    dependsOn: ["structure-outline"],
+  });
   await approveArtifact(taskDir, "plan");
 }
 
@@ -582,7 +890,11 @@ function fakeExtensionApi(
   branch: unknown[] = [],
   execResult = { stdout: "", stderr: "", code: 0, killed: false },
   selections: Array<string | undefined> = [],
-  agentRpc?: (request: { method: string; requestId: string; params?: Record<string, unknown> }, reply: (response: unknown) => void, emitCompletion: (payload: Record<string, unknown>) => void) => void,
+  agentRpc?: (
+    request: { method: string; requestId: string; params?: Record<string, unknown> },
+    reply: (response: unknown) => void,
+    emitCompletion: (payload: Record<string, unknown>) => void,
+  ) => void,
   hasUI = true,
   mode: "tui" | "rpc" | "print" = hasUI ? "tui" : "print",
 ) {
@@ -595,7 +907,10 @@ function fakeExtensionApi(
   const selectionCalls: Array<{ title: string; options: string[] }> = [];
   const sentUserMessages: string[] = [];
   const sentUserMessageOptions: Array<{ deliverAs?: string } | undefined> = [];
-  const sentMessages: Array<{ message: { customType: string; content: string; display: boolean }; options: { triggerTurn?: boolean } | undefined }> = [];
+  const sentMessages: Array<{
+    message: { customType: string; content: string; display: boolean };
+    options: { triggerTurn?: boolean } | undefined;
+  }> = [];
   const appendedEntries: Array<{ type: string; customType: string; data: unknown }> = [];
   const entryRenderers = new Map<string, unknown>();
   const sessionEntries = [...branch];
@@ -615,7 +930,9 @@ function fakeExtensionApi(
       const candidate = tool as Tool;
       tools.set(candidate.name, candidate);
     },
-    registerEntryRenderer: (customType: string, renderer: unknown) => { entryRenderers.set(customType, renderer); },
+    registerEntryRenderer: (customType: string, renderer: unknown) => {
+      entryRenderers.set(customType, renderer);
+    },
     appendEntry: (customType: string, data: unknown) => {
       const entry = { type: "custom", customType, data };
       appendedEntries.push(entry);
@@ -634,7 +951,12 @@ function fakeExtensionApi(
       emit: (_channel: string, request: { requestId: string; method: string; params?: Record<string, unknown> }) => {
         const reply = (response: unknown) => rpcHandlers.get(`subagents:rpc:v1:reply:${request.requestId}`)?.(response);
         if (request.method === "ping") {
-          reply({ version: 1, requestId: request.requestId, success: true, data: { version: 1, methods: ["ping", "status", "spawn", "interrupt", "stop"] } });
+          reply({
+            version: 1,
+            requestId: request.requestId,
+            success: true,
+            data: { version: 1, methods: ["ping", "status", "spawn", "interrupt", "stop"] },
+          });
           return;
         }
         agentRpc?.(request, reply, emitCompletion);
@@ -648,7 +970,10 @@ function fakeExtensionApi(
       sentUserMessages.push(message);
       sentUserMessageOptions.push(options);
     },
-    sendMessage: (message: { customType: string; content: string; display: boolean }, options?: { triggerTurn?: boolean }) => {
+    sendMessage: (
+      message: { customType: string; content: string; display: boolean },
+      options?: { triggerTurn?: boolean },
+    ) => {
       sentMessages.push({ message, options });
     },
     registerCommand: (name: string, command: unknown) => {
@@ -662,17 +987,40 @@ function fakeExtensionApi(
     mode,
     sessionManager: { getBranch: () => sessionEntries },
     ui: {
-      notify: async (message: string) => { notifications.push(message); },
+      notify: async (message: string) => {
+        notifications.push(message);
+      },
       editor: async (_title: string, _value: string) => undefined,
       select: async (title: string, options: string[]) => {
         selectionCalls.push({ title, options });
         return selections.shift();
       },
-      setStatus: (_key: string, value: string | undefined) => { statuses.push(value); },
-      setWidget: (...args: unknown[]) => { widgets.push(args); },
+      setStatus: (_key: string, value: string | undefined) => {
+        statuses.push(value);
+      },
+      setWidget: (...args: unknown[]) => {
+        widgets.push(args);
+      },
     },
   });
-  return { tools, commands, context, eventHandlers, notifications, processCalls, sentUserMessageOptions, sentUserMessages, sentMessages, appendedEntries, entryRenderers, sessionEntries, statuses, widgets, selectionCalls, emitCompletion };
+  return {
+    tools,
+    commands,
+    context,
+    eventHandlers,
+    notifications,
+    processCalls,
+    sentUserMessageOptions,
+    sentUserMessages,
+    sentMessages,
+    appendedEntries,
+    entryRenderers,
+    sessionEntries,
+    statuses,
+    widgets,
+    selectionCalls,
+    emitCompletion,
+  };
 }
 
 async function tempProject(): Promise<string> {
@@ -696,42 +1044,78 @@ function flowFromCreateTaskResult(value: unknown): string {
   return (details as { flow: string }).flow;
 }
 
-
 test("rpi_implement_phase rejects Markdown heading syntax and accepts canonical phase heading text", async () => {
   const project = await tempProject();
   const root = join(project, ".pi", "artifacts");
-  const task = await createTask(root, { slug: "phase-envelope", title: "Phase envelope", flow: "rpi", baseBranch: "main" });
+  const task = await createTask(root, {
+    slug: "phase-envelope",
+    title: "Phase envelope",
+    flow: "rpi",
+    baseBranch: "main",
+  });
   await prepareImplementationSource(join(root, task.slug), "plan");
-  const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } } }];
+  const branch = [
+    {
+      type: "message",
+      message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } },
+    },
+  ];
   let spawnParams: Record<string, unknown> | undefined;
   let spawnCount = 0;
   const extension = fakeExtensionApi(branch, undefined, [], (request, reply, emitCompletion) => {
     if (request.method === "spawn") {
       spawnCount += 1;
       spawnParams = request.params;
-      reply({ version: 1, requestId: request.requestId, success: true, data: { text: "spawn", details: { runId: "envelope-run" } } });
+      reply({
+        version: 1,
+        requestId: request.requestId,
+        success: true,
+        data: { text: "spawn", details: { runId: "envelope-run" } },
+      });
       emitCompletion({ runId: "envelope-run", state: "complete" });
       return;
     }
-    reply({ version: 1, requestId: request.requestId, success: true, data: { asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "envelope-run", state: "complete" }] } } });
+    reply({
+      version: 1,
+      requestId: request.requestId,
+      success: true,
+      data: {
+        asyncSnapshot: {
+          kind: "pi-subagents.async-status-snapshot",
+          version: 1,
+          runs: [{ id: "envelope-run", state: "complete" }],
+        },
+      },
+    });
     emitCompletion({ runId: "envelope-run", state: "complete" });
   });
   try {
-    await assert.rejects(invoke(extension.tools.get("rpi_implement_phase")!, {
-      phaseId: "## Phase 1: Implement the phase.",
-      agent: "artifact-implementer",
-      phaseTask: "Implement the direct child launch.",
-      model: "provider/fast-model",
-      timeoutMs: 100,
-    }, extension.context(project)), /must match exactly one phase heading/);
+    await assert.rejects(
+      invoke(
+        extension.tools.get("rpi_implement_phase")!,
+        {
+          phaseId: "## Phase 1: Implement the phase.",
+          agent: "artifact-implementer",
+          phaseTask: "Implement the direct child launch.",
+          model: "provider/fast-model",
+          timeoutMs: 100,
+        },
+        extension.context(project),
+      ),
+      /must match exactly one phase heading/,
+    );
     assert.equal(spawnCount, 0);
-    await invoke(extension.tools.get("rpi_implement_phase")!, {
-      phaseId: "Phase 1: Implement the phase.",
-      agent: "artifact-implementer",
-      phaseTask: "Implement the direct child launch.",
-      model: "provider/fast-model",
-      timeoutMs: 100,
-    }, extension.context(project));
+    await invoke(
+      extension.tools.get("rpi_implement_phase")!,
+      {
+        phaseId: "Phase 1: Implement the phase.",
+        agent: "artifact-implementer",
+        phaseTask: "Implement the direct child launch.",
+        model: "provider/fast-model",
+        timeoutMs: 100,
+      },
+      extension.context(project),
+    );
     assert.equal(spawnCount, 1);
     assert.ok(spawnParams);
     assert.equal(spawnParams?.agent, "artifact-implementer");
@@ -739,7 +1123,10 @@ test("rpi_implement_phase rejects Markdown heading syntax and accepts canonical 
     assert.equal(spawnParams?.model, "provider/fast-model");
     assert.equal("workflowScript" in (spawnParams ?? {}), false);
     assert.match(String(spawnParams?.task), new RegExp(`Selected task slug: ${task.slug}`));
-    assert.match(String(spawnParams?.task), new RegExp(`Task directory: ${join(root, task.slug).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    assert.match(
+      String(spawnParams?.task),
+      new RegExp(`Task directory: ${join(root, task.slug).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+    );
     assert.match(String(spawnParams?.task), /Authoritative artifact type: plan/);
     assert.match(String(spawnParams?.task), /Exact phase ID: Phase 1: Implement the phase\./);
     assert.match(String(spawnParams?.task), /Implement the direct child launch\./);
@@ -751,24 +1138,73 @@ test("rpi_implement_phase rejects Markdown heading syntax and accepts canonical 
 test("rpi_implement_phase rejects a missing or unapproved authoritative artifact before spawn", async () => {
   const project = await tempProject();
   const root = join(project, ".pi", "artifacts");
-  const missingTask = await createTask(root, { slug: "phase-precondition", title: "Phase precondition", flow: "rpi", baseBranch: "main" });
-  const missingBranch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: missingTask.slug } } }];
+  const missingTask = await createTask(root, {
+    slug: "phase-precondition",
+    title: "Phase precondition",
+    flow: "rpi",
+    baseBranch: "main",
+  });
+  const missingBranch = [
+    {
+      type: "message",
+      message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: missingTask.slug } },
+    },
+  ];
   let spawnCount = 0;
   const extension = fakeExtensionApi(missingBranch, undefined, [], (request, reply) => {
     if (request.method === "spawn") spawnCount += 1;
-    reply({ version: 1, requestId: request.requestId, success: true, data: { text: "spawn", details: { runId: "never" } } });
+    reply({
+      version: 1,
+      requestId: request.requestId,
+      success: true,
+      data: { text: "spawn", details: { runId: "never" } },
+    });
   });
   try {
-    await assert.rejects(invoke(extension.tools.get("rpi_implement_phase")!, { phaseId: "Phase 1: Implement the phase.", agent: "artifact-implementer", phaseTask: "task" }, extension.context(project)), /active plan artifact/);
+    await assert.rejects(
+      invoke(
+        extension.tools.get("rpi_implement_phase")!,
+        { phaseId: "Phase 1: Implement the phase.", agent: "artifact-implementer", phaseTask: "task" },
+        extension.context(project),
+      ),
+      /active plan artifact/,
+    );
 
-    const unapprovedTask = await createTask(root, { slug: "unapproved-phase", title: "Unapproved phase", flow: "freeform", baseBranch: "main" });
-    await createArtifact(join(root, unapprovedTask.slug), { type: "plan", description: "draft-plan", content: "draft", dependsOn: [] });
-    const unapprovedBranch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: unapprovedTask.slug } } }];
+    const unapprovedTask = await createTask(root, {
+      slug: "unapproved-phase",
+      title: "Unapproved phase",
+      flow: "freeform",
+      baseBranch: "main",
+    });
+    await createArtifact(join(root, unapprovedTask.slug), {
+      type: "plan",
+      description: "draft-plan",
+      content: "draft",
+      dependsOn: [],
+    });
+    const unapprovedBranch = [
+      {
+        type: "message",
+        message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: unapprovedTask.slug } },
+      },
+    ];
     const unapprovedExtension = fakeExtensionApi(unapprovedBranch, undefined, [], (request, reply) => {
       if (request.method === "spawn") spawnCount += 1;
-      reply({ version: 1, requestId: request.requestId, success: true, data: { text: "spawn", details: { runId: "never" } } });
+      reply({
+        version: 1,
+        requestId: request.requestId,
+        success: true,
+        data: { text: "spawn", details: { runId: "never" } },
+      });
     });
-    await assert.rejects(invoke(unapprovedExtension.tools.get("rpi_implement_phase")!, { phaseId: "Phase 1: Implement the phase.", agent: "artifact-implementer", phaseTask: "task" }, unapprovedExtension.context(project)), /approved plan artifact/);
+    await assert.rejects(
+      invoke(
+        unapprovedExtension.tools.get("rpi_implement_phase")!,
+        { phaseId: "Phase 1: Implement the phase.", agent: "artifact-implementer", phaseTask: "task" },
+        unapprovedExtension.context(project),
+      ),
+      /approved plan artifact/,
+    );
     assert.equal(spawnCount, 0);
   } finally {
     await rm(project, { recursive: true, force: true });
@@ -779,7 +1215,12 @@ for (const sourceType of ["plan", "structure-outline"] as const) {
   test(`rpi_implement_phase rejects an approved ${sourceType} replaced by an external symlink`, async () => {
     const project = await tempProject();
     const root = join(project, ".pi", "artifacts");
-    const task = await createTask(root, { slug: "symlink-escape", title: "Symlink escape", flow: "rpi", baseBranch: "main" });
+    const task = await createTask(root, {
+      slug: "symlink-escape",
+      title: "Symlink escape",
+      flow: "rpi",
+      baseBranch: "main",
+    });
     const directory = join(root, task.slug);
     await prepareImplementationSource(directory, sourceType);
     const artifact = (await loadManifest(directory)).artifacts.find((entry) => entry.type === sourceType);
@@ -789,7 +1230,12 @@ for (const sourceType of ["plan", "structure-outline"] as const) {
     let spawnCount = 0;
     const extension = fakeExtensionApi(branch, undefined, [], (request, reply, emitCompletion) => {
       if (request.method === "spawn") spawnCount += 1;
-      reply({ version: 1, requestId: request.requestId, success: true, data: { text: "spawn", details: { runId: "unexpected-run" } } });
+      reply({
+        version: 1,
+        requestId: request.requestId,
+        success: true,
+        data: { text: "spawn", details: { runId: "unexpected-run" } },
+      });
       emitCompletion({ runId: "unexpected-run", state: "complete" });
     });
     try {
@@ -797,11 +1243,18 @@ for (const sourceType of ["plan", "structure-outline"] as const) {
       await writeFile(externalPath, "## Phase 1: Implement the phase.\n\nExternal instructions.\n");
       await unlink(join(directory, artifact.path));
       await symlink(externalPath, join(directory, artifact.path));
-      await assert.rejects(invoke(extension.tools.get("rpi_implement_phase")!, {
-        phaseId: "Phase 1: Implement the phase.",
-        agent: sourceType === "plan" ? "artifact-implementer" : "artifact-outline-implementer",
-        phaseTask: "Implement the phase",
-      }, extension.context(project)), /resolves outside task directory/);
+      await assert.rejects(
+        invoke(
+          extension.tools.get("rpi_implement_phase")!,
+          {
+            phaseId: "Phase 1: Implement the phase.",
+            agent: sourceType === "plan" ? "artifact-implementer" : "artifact-outline-implementer",
+            phaseTask: "Implement the phase",
+          },
+          extension.context(project),
+        ),
+        /resolves outside task directory/,
+      );
       assert.equal(spawnCount, 0);
     } finally {
       await rm(project, { recursive: true, force: true });
@@ -821,7 +1274,12 @@ test("rpi_implement_phase preserves symlinked task roots and sends the canonical
   let spawnTask = "";
   const extension = fakeExtensionApi(branch, undefined, [], (request, reply, emitCompletion) => {
     if (request.method === "spawn") spawnTask = String(request.params?.task);
-    reply({ version: 1, requestId: request.requestId, success: true, data: { text: "spawn", details: { runId: "linked-run" } } });
+    reply({
+      version: 1,
+      requestId: request.requestId,
+      success: true,
+      data: { text: "spawn", details: { runId: "linked-run" } },
+    });
     emitCompletion({ runId: "linked-run", state: "complete" });
   });
   try {
@@ -831,9 +1289,15 @@ test("rpi_implement_phase preserves symlinked task roots and sends the canonical
     const canonicalArtifact = join(movedDirectory, "canonical-plan.md");
     await rename(join(directory, artifact.path), canonicalArtifact);
     await symlink(canonicalArtifact, join(directory, artifact.path));
-    await invoke(extension.tools.get("rpi_implement_phase")!, {
-      phaseId: "Phase 1: Implement the phase.", agent: "artifact-implementer", phaseTask: "Implement",
-    }, extension.context(project));
+    await invoke(
+      extension.tools.get("rpi_implement_phase")!,
+      {
+        phaseId: "Phase 1: Implement the phase.",
+        agent: "artifact-implementer",
+        phaseTask: "Implement",
+      },
+      extension.context(project),
+    );
     assert.ok(spawnTask.includes(`Authoritative artifact path: ${await realpath(canonicalArtifact)}\n`));
     assert.ok(!spawnTask.includes(`Authoritative artifact path: ${join(directory, artifact.path)}\n`));
   } finally {
@@ -844,20 +1308,54 @@ test("rpi_implement_phase preserves symlinked task roots and sends the canonical
 test("rpi_implement_phase maps outline implementers to the approved structure-outline", async () => {
   const project = await tempProject();
   const root = join(project, ".pi", "artifacts");
-  const task = await createTask(root, { slug: "outline-envelope", title: "Outline envelope", flow: "rpi", baseBranch: "main" });
+  const task = await createTask(root, {
+    slug: "outline-envelope",
+    title: "Outline envelope",
+    flow: "rpi",
+    baseBranch: "main",
+  });
   await prepareImplementationSource(join(root, task.slug), "structure-outline");
-  const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } } }];
+  const branch = [
+    {
+      type: "message",
+      message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } },
+    },
+  ];
   let spawnTask = "";
   const extension = fakeExtensionApi(branch, undefined, [], (request, reply) => {
     if (request.method === "spawn") {
       spawnTask = String(request.params?.task);
-      reply({ version: 1, requestId: request.requestId, success: true, data: { text: "spawn", details: { runId: "outline-run" } } });
+      reply({
+        version: 1,
+        requestId: request.requestId,
+        success: true,
+        data: { text: "spawn", details: { runId: "outline-run" } },
+      });
       return;
     }
-    reply({ version: 1, requestId: request.requestId, success: true, data: { asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "outline-run", state: "complete" }] } } });
+    reply({
+      version: 1,
+      requestId: request.requestId,
+      success: true,
+      data: {
+        asyncSnapshot: {
+          kind: "pi-subagents.async-status-snapshot",
+          version: 1,
+          runs: [{ id: "outline-run", state: "complete" }],
+        },
+      },
+    });
   });
   try {
-    await invoke(extension.tools.get("rpi_implement_phase")!, { phaseId: "Phase 1: Implement the phase.", agent: "artifact-outline-implementer", phaseTask: "Implement outline phase" }, extension.context(project));
+    await invoke(
+      extension.tools.get("rpi_implement_phase")!,
+      {
+        phaseId: "Phase 1: Implement the phase.",
+        agent: "artifact-outline-implementer",
+        phaseTask: "Implement outline phase",
+      },
+      extension.context(project),
+    );
     assert.match(spawnTask, /Authoritative artifact type: structure-outline/);
   } finally {
     await rm(project, { recursive: true, force: true });
@@ -874,29 +1372,60 @@ test("rpi_implement_phase uses an approved oneshot ticket and canonical implemen
     baseBranch: "main",
     ticketBody: "# One-shot implementation\n\nImplement the disposable change.",
   });
-  const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } } }];
+  const branch = [
+    {
+      type: "message",
+      message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } },
+    },
+  ];
   let spawnTask = "";
   let spawnCount = 0;
   const extension = fakeExtensionApi(branch, undefined, [], (request, reply, emitCompletion) => {
     if (request.method === "spawn") {
       spawnCount += 1;
       spawnTask = String(request.params?.task);
-      reply({ version: 1, requestId: request.requestId, success: true, data: { text: "spawn", details: { runId: "oneshot-run" } } });
+      reply({
+        version: 1,
+        requestId: request.requestId,
+        success: true,
+        data: { text: "spawn", details: { runId: "oneshot-run" } },
+      });
       emitCompletion({ runId: "oneshot-run", state: "complete" });
       return;
     }
-    reply({ version: 1, requestId: request.requestId, success: true, data: { asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "oneshot-run", state: "complete" }] } } });
+    reply({
+      version: 1,
+      requestId: request.requestId,
+      success: true,
+      data: {
+        asyncSnapshot: {
+          kind: "pi-subagents.async-status-snapshot",
+          version: 1,
+          runs: [{ id: "oneshot-run", state: "complete" }],
+        },
+      },
+    });
     emitCompletion({ runId: "oneshot-run", state: "complete" });
   });
   try {
     await assert.rejects(
-      invoke(extension.tools.get("rpi_implement_phase")!, { phaseId: "Phase 1: wrong", agent: "artifact-implementer", phaseTask: "Implement" }, extension.context(project)),
+      invoke(
+        extension.tools.get("rpi_implement_phase")!,
+        { phaseId: "Phase 1: wrong", agent: "artifact-implementer", phaseTask: "Implement" },
+        extension.context(project),
+      ),
       /must use phase ID "implementation"/,
     );
     assert.equal(spawnCount, 0);
-    await invoke(extension.tools.get("rpi_implement_phase")!, { phaseId: "implementation", agent: "artifact-implementer", phaseTask: "Implement" }, extension.context(project));
+    await invoke(
+      extension.tools.get("rpi_implement_phase")!,
+      { phaseId: "implementation", agent: "artifact-implementer", phaseTask: "Implement" },
+      extension.context(project),
+    );
     assert.match(spawnTask, /Authoritative artifact type: ticket/);
-    assert.ok(spawnTask.includes(`Authoritative artifact path: ${await realpath(join(root, task.slug, "ticket.md"))}\n`));
+    assert.ok(
+      spawnTask.includes(`Authoritative artifact path: ${await realpath(join(root, task.slug, "ticket.md"))}\n`),
+    );
     assert.match(spawnTask, /Exact phase ID: implementation/);
     assert.equal(spawnCount, 1);
   } finally {
@@ -907,22 +1436,51 @@ test("rpi_implement_phase uses an approved oneshot ticket and canonical implemen
 test("rpi_implement_phase requires one exact authoritative phase heading", async () => {
   const project = await tempProject();
   const root = join(project, ".pi", "artifacts");
-  const task = await createTask(root, { slug: "phase-resolution", title: "Phase resolution", flow: "rpi", baseBranch: "main" });
+  const task = await createTask(root, {
+    slug: "phase-resolution",
+    title: "Phase resolution",
+    flow: "rpi",
+    baseBranch: "main",
+  });
   await prepareImplementationSource(join(root, task.slug), "plan");
-  const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } } }];
+  const branch = [
+    {
+      type: "message",
+      message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } },
+    },
+  ];
   let spawnCount = 0;
   const extension = fakeExtensionApi(branch, undefined, [], (request, reply) => {
     if (request.method === "spawn") spawnCount += 1;
-    reply({ version: 1, requestId: request.requestId, success: true, data: { text: "spawn", details: { runId: "never" } } });
+    reply({
+      version: 1,
+      requestId: request.requestId,
+      success: true,
+      data: { text: "spawn", details: { runId: "never" } },
+    });
   });
   try {
     await assert.rejects(
-      invoke(extension.tools.get("rpi_implement_phase")!, { phaseId: "Phase 2: Missing", agent: "artifact-implementer", phaseTask: "Implement" }, extension.context(project)),
+      invoke(
+        extension.tools.get("rpi_implement_phase")!,
+        { phaseId: "Phase 2: Missing", agent: "artifact-implementer", phaseTask: "Implement" },
+        extension.context(project),
+      ),
       /must match exactly one phase heading/,
     );
-    await updateArtifact(join(root, task.slug), "plan", "## Phase 1: Duplicate\n\nfirst\n\n## Phase 1: Duplicate\n\nsecond");
+    await updateArtifact(
+      join(root, task.slug),
+      "plan",
+      "## Phase 1: Duplicate\n\nfirst\n\n## Phase 1: Duplicate\n\nsecond",
+    );
+    await setArtifactStatus(await loadManifest(join(root, task.slug)), "plan", "in-review", join(root, task.slug));
+    await setArtifactStatus(await loadManifest(join(root, task.slug)), "plan", "approved", join(root, task.slug));
     await assert.rejects(
-      invoke(extension.tools.get("rpi_implement_phase")!, { phaseId: "Phase 1: Duplicate", agent: "artifact-implementer", phaseTask: "Implement" }, extension.context(project)),
+      invoke(
+        extension.tools.get("rpi_implement_phase")!,
+        { phaseId: "Phase 1: Duplicate", agent: "artifact-implementer", phaseTask: "Implement" },
+        extension.context(project),
+      ),
       /must match exactly one phase heading/,
     );
     assert.equal(spawnCount, 0);
@@ -936,32 +1494,77 @@ test("rpi_implement_phase formats stopped runs as failures and preserves termina
   const root = join(project, ".pi", "artifacts");
   const task = await createTask(root, { slug: "phase-result", title: "Phase result", flow: "rpi", baseBranch: "main" });
   await prepareImplementationSource(join(root, task.slug), "plan");
-  const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } } }];
+  const branch = [
+    {
+      type: "message",
+      message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } },
+    },
+  ];
   const { tools, context } = fakeExtensionApi(branch, undefined, [], (request, reply, emitCompletion) => {
     if (request.method === "spawn") {
-      reply({ version: 1, requestId: request.requestId, success: true, data: { text: "spawn", details: { runId: "stopped-run" } } });
-      emitCompletion({ runId: "stopped-run", state: "stopped", output: "The child stopped after partial work.", results: [{ summary: "partial change" }] });
+      reply({
+        version: 1,
+        requestId: request.requestId,
+        success: true,
+        data: { text: "spawn", details: { runId: "stopped-run" } },
+      });
+      emitCompletion({
+        runId: "stopped-run",
+        state: "stopped",
+        output: "The child stopped after partial work.",
+        results: [{ summary: "partial change" }],
+      });
       return;
     }
     if (request.method === "status") {
-      reply({ version: 1, requestId: request.requestId, success: true, data: {
-        text: "stopped", output: "The child stopped after partial work.", results: [{ summary: "partial change" }],
-        asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "stopped-run", state: "stopped" }] },
-      } });
-      emitCompletion({ runId: "stopped-run", state: "stopped", output: "The child stopped after partial work.", results: [{ summary: "partial change" }] });
+      reply({
+        version: 1,
+        requestId: request.requestId,
+        success: true,
+        data: {
+          text: "stopped",
+          output: "The child stopped after partial work.",
+          results: [{ summary: "partial change" }],
+          asyncSnapshot: {
+            kind: "pi-subagents.async-status-snapshot",
+            version: 1,
+            runs: [{ id: "stopped-run", state: "stopped" }],
+          },
+        },
+      });
+      emitCompletion({
+        runId: "stopped-run",
+        state: "stopped",
+        output: "The child stopped after partial work.",
+        results: [{ summary: "partial change" }],
+      });
       return;
     }
     reply({ version: 1, requestId: request.requestId, success: true, data: { text: "interrupted" } });
   });
   try {
-    const result = await invoke(tools.get("rpi_implement_phase")!, {
-      phaseId: "Phase 1: Implement the phase.", agent: "artifact-implementer", phaseTask: "Implement safely", timeoutMs: 10,
-    }, context(project)) as { content: Array<{ text: string }>; details: { runId: string; state: string; phaseId: string } };
+    const result = (await invoke(
+      tools.get("rpi_implement_phase")!,
+      {
+        phaseId: "Phase 1: Implement the phase.",
+        agent: "artifact-implementer",
+        phaseTask: "Implement safely",
+        timeoutMs: 10,
+      },
+      context(project),
+    )) as { content: Array<{ text: string }>; details: { runId: string; state: string; phaseId: string } };
 
-    assert.match(result.content[0]!.text, /Implementation phase Phase 1: Implement the phase\. failed with state "stopped" \(run stopped-run\)/);
+    assert.match(
+      result.content[0]!.text,
+      /Implementation phase Phase 1: Implement the phase\. failed with state "stopped" \(run stopped-run\)/,
+    );
     assert.match(result.content[0]!.text, /The child stopped after partial work/);
     assert.match(result.content[0]!.text, /partial change/);
-    assert.deepEqual(result.details, { runId: "stopped-run", state: "stopped", phaseId: "Phase 1: Implement the phase." });
+    assert.deepEqual(result.details, {
+      runId: "stopped-run",
+      state: "stopped",
+      phaseId: "Phase 1: Implement the phase.",
+    });
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -970,22 +1573,47 @@ test("rpi_implement_phase formats stopped runs as failures and preserves termina
 test("rpi_implement_phase forwards configured timeouts to its phase diagnostic", async () => {
   const project = await tempProject();
   const root = join(project, ".pi", "artifacts");
-  const task = await createTask(root, { slug: "phase-timeout", title: "Phase timeout", flow: "rpi", baseBranch: "main" });
+  const task = await createTask(root, {
+    slug: "phase-timeout",
+    title: "Phase timeout",
+    flow: "rpi",
+    baseBranch: "main",
+  });
   await prepareImplementationSource(join(root, task.slug), "plan");
-  const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } } }];
+  const branch = [
+    {
+      type: "message",
+      message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } },
+    },
+  ];
   const { tools, context } = fakeExtensionApi(branch, undefined, [], (request, reply) => {
-    const data = request.method === "spawn"
-      ? { text: "spawn", details: { runId: "tool-timeout-run" } }
-      : request.method === "status"
-        ? { text: "running", asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "tool-timeout-run", state: "running" }] } }
-        : { text: "interrupted" };
+    const data =
+      request.method === "spawn"
+        ? { text: "spawn", details: { runId: "tool-timeout-run" } }
+        : request.method === "status"
+          ? {
+              text: "running",
+              asyncSnapshot: {
+                kind: "pi-subagents.async-status-snapshot",
+                version: 1,
+                runs: [{ id: "tool-timeout-run", state: "running" }],
+              },
+            }
+          : { text: "interrupted" };
     reply({ version: 1, requestId: request.requestId, success: true, data });
   });
   try {
     await assert.rejects(
-      invoke(tools.get("rpi_implement_phase")!, {
-        phaseId: "Phase 1: Implement the phase.", agent: "artifact-implementer", phaseTask: "Implement safely", timeoutMs: 10,
-      }, context(project)),
+      invoke(
+        tools.get("rpi_implement_phase")!,
+        {
+          phaseId: "Phase 1: Implement the phase.",
+          agent: "artifact-implementer",
+          phaseTask: "Implement safely",
+          timeoutMs: 10,
+        },
+        context(project),
+      ),
       (error: Error) => {
         assert.match(error.message, /The implementation phase timed out after 10ms/);
         assert.match(error.message, /phase Phase 1: Implement the phase\./);
@@ -1002,20 +1630,45 @@ test("rpi_implement_phase forwards configured timeouts to its phase diagnostic",
 test("rpi_implement_phase presents partial evidence without failure wording", async () => {
   const project = await tempProject();
   const root = join(project, ".pi", "artifacts");
-  const task = await createTask(root, { slug: "phase-partial", title: "Phase partial", flow: "rpi", baseBranch: "main" });
+  const task = await createTask(root, {
+    slug: "phase-partial",
+    title: "Phase partial",
+    flow: "rpi",
+    baseBranch: "main",
+  });
   await prepareImplementationSource(join(root, task.slug), "plan");
-  const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } } }];
+  const branch = [
+    {
+      type: "message",
+      message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } },
+    },
+  ];
   const { tools, context } = fakeExtensionApi(branch, undefined, [], (request, reply, emitCompletion) => {
-    const data = request.method === "spawn"
-      ? { text: "spawn", details: { runId: "partial-run" } }
-      : { text: "partial", output: "Partial evidence", asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "partial-run", state: "partial" }] } };
+    const data =
+      request.method === "spawn"
+        ? { text: "spawn", details: { runId: "partial-run" } }
+        : {
+            text: "partial",
+            output: "Partial evidence",
+            asyncSnapshot: {
+              kind: "pi-subagents.async-status-snapshot",
+              version: 1,
+              runs: [{ id: "partial-run", state: "partial" }],
+            },
+          };
     reply({ version: 1, requestId: request.requestId, success: true, data });
     emitCompletion({ runId: "partial-run", state: "partial", output: "Partial evidence" });
   });
   try {
-    const result = await invoke(tools.get("rpi_implement_phase")!, {
-      phaseId: "Phase 1: Implement the phase.", agent: "artifact-implementer", phaseTask: "Implement safely",
-    }, context(project)) as { content: Array<{ text: string }>; details: { state: string } };
+    const result = (await invoke(
+      tools.get("rpi_implement_phase")!,
+      {
+        phaseId: "Phase 1: Implement the phase.",
+        agent: "artifact-implementer",
+        phaseTask: "Implement safely",
+      },
+      context(project),
+    )) as { content: Array<{ text: string }>; details: { state: string } };
     assert.equal(result.details.state, "partial");
     assert.match(result.content[0]!.text, /completed partially/);
     assert.doesNotMatch(result.content[0]!.text, /failed with state/);
@@ -1032,7 +1685,10 @@ test("artifact public tools reject traversal slugs before filesystem access", as
   try {
     await assert.rejects(invoke(tools.get("rpi_get_task_context")!, { slug: "../outside" }, ctx), /Invalid task slug/);
     await assert.rejects(invoke(tools.get("rpi_list_artifacts")!, { slug: "../outside" }, ctx), /Invalid task slug/);
-    await assert.rejects(invoke(tools.get("rpi_read_artifact")!, { slug: "../outside", artifactId: "research" }, ctx), /Invalid task slug/);
+    await assert.rejects(
+      invoke(tools.get("rpi_read_artifact")!, { slug: "../outside", artifactId: "research" }, ctx),
+      /Invalid task slug/,
+    );
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -1040,13 +1696,12 @@ test("artifact public tools reject traversal slugs before filesystem access", as
 
 test("restored task selection only trusts RPI selection tool results", async () => {
   const project = await tempProject();
-  const maliciousBranch = [{ type: "message", message: { role: "toolResult", toolName: "bash", details: { taskSlug: "victim" } } }];
+  const maliciousBranch = [
+    { type: "message", message: { role: "toolResult", toolName: "bash", details: { taskSlug: "victim" } } },
+  ];
   const { tools, context } = fakeExtensionApi(maliciousBranch);
   try {
-    await assert.rejects(
-      invoke(tools.get("rpi_list_artifacts")!, {}, context(project)),
-      /No task selected/,
-    );
+    await assert.rejects(invoke(tools.get("rpi_list_artifacts")!, {}, context(project)), /No task selected/);
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -1060,14 +1715,20 @@ test("rpi-task selects an existing task and rpi-status reports its persisted flo
     const ctx = context(project);
     await commands.get("rpi-task")!.handler("existing-prd", ctx);
     await commands.get("rpi-status")!.handler("", ctx);
-    assert.ok(statuses.includes("existing-prd · prd · actions: create research-questions, create mockup (optional) · 0 in review"));
+    assert.ok(
+      statuses.includes(
+        "existing-prd · prd · actions: create research-questions, create mockup (optional) · 0 in review",
+      ),
+    );
     const entry = appendedEntries.find((candidate) => candidate.customType === "rpi-task-status");
     assert.ok(entry);
     assert.match(String((entry.data as { report: string }).report), /Suggested actions:\n- create research-questions/);
     initTheme();
-    const renderer = (fakeExtensionApi().entryRenderers.get("rpi-task-status"));
+    const renderer = fakeExtensionApi().entryRenderers.get("rpi-task-status");
     if (typeof renderer !== "function") throw new Error("Expected task status renderer");
-    const compact = renderer(entry, { expanded: false }, { fg: (_color: string, text: string) => text }).render(160).join("\n");
+    const compact = renderer(entry, { expanded: false }, { fg: (_color: string, text: string) => text })
+      .render(160)
+      .join("\n");
     assert.match(compact, /Next: create research-questions/);
     assert.match(compact, /to expand/);
   } finally {
@@ -1081,11 +1742,26 @@ test("rpi status commands return reports through RPC notifications", async () =>
   const task = await createTask(root, { slug: "rpc-status", title: "RPC status", flow: "rpi", baseBranch: "main" });
   const directory = join(root, task.slug);
   try {
-    await createArtifact(directory, { type: "research-questions", description: "questions", content: "q", dependsOn: [] });
+    await createArtifact(directory, {
+      type: "research-questions",
+      description: "questions",
+      content: "q",
+      dependsOn: [],
+    });
     await setArtifactStatus(await loadManifest(directory), "research-questions", "in-review", directory);
     await setArtifactStatus(await loadManifest(directory), "research-questions", "approved", directory);
-    await createArtifact(directory, { type: "research", description: "research", content: "r", dependsOn: ["research-questions"] });
-    const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } } }];
+    await createArtifact(directory, {
+      type: "research",
+      description: "research",
+      content: "r",
+      dependsOn: ["research-questions"],
+    });
+    const branch = [
+      {
+        type: "message",
+        message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } },
+      },
+    ];
     const extension = fakeExtensionApi(branch, undefined, [], undefined, true, "rpc");
     const ctx = extension.context(project);
 
@@ -1108,11 +1784,21 @@ test("rpi_create_task reopens and selects the persisted task flow", async () => 
   await createTask(root, { slug: "persisted-prd", title: "Persisted", flow: "prd", baseBranch: "main" });
   const { tools, context, statuses } = fakeExtensionApi();
   try {
-    const result = await invoke(tools.get("rpi_create_task")!, {
-      slug: "persisted-prd", title: "Wrong requested flow", flow: "rpi",
-    }, context(project));
+    const result = await invoke(
+      tools.get("rpi_create_task")!,
+      {
+        slug: "persisted-prd",
+        title: "Wrong requested flow",
+        flow: "rpi",
+      },
+      context(project),
+    );
     assert.equal(flowFromCreateTaskResult(result), "prd");
-    assert.ok(statuses.includes("persisted-prd · prd · actions: create research-questions, create mockup (optional) · 0 in review"));
+    assert.ok(
+      statuses.includes(
+        "persisted-prd · prd · actions: create research-questions, create mockup (optional) · 0 in review",
+      ),
+    );
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -1121,36 +1807,106 @@ test("rpi_create_task reopens and selects the persisted task flow", async () => 
 test("rpi_implement_phase forwards queued and running updates with compact render hooks", async () => {
   const project = await tempProject();
   const root = join(project, ".pi", "artifacts");
-  const task = await createTask(root, { slug: "phase-progress", title: "Phase progress", flow: "rpi", baseBranch: "main" });
+  const task = await createTask(root, {
+    slug: "phase-progress",
+    title: "Phase progress",
+    flow: "rpi",
+    baseBranch: "main",
+  });
   await prepareImplementationSource(join(root, task.slug), "plan");
-  const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } } }];
+  const branch = [
+    {
+      type: "message",
+      message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } },
+    },
+  ];
   let statusCalls = 0;
   const extension = fakeExtensionApi(branch, undefined, [], (request, reply, emitCompletion) => {
     if (request.method === "spawn") {
-      reply({ version: 1, requestId: request.requestId, success: true, data: { text: "spawn", details: { runId: "progress-phase-run" } } });
+      reply({
+        version: 1,
+        requestId: request.requestId,
+        success: true,
+        data: { text: "spawn", details: { runId: "progress-phase-run" } },
+      });
       return;
     }
     if (request.method === "status") {
       const state = ++statusCalls === 1 ? "running" : "complete";
-      reply({ version: 1, requestId: request.requestId, success: true, data: { text: state, asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: "progress-phase-run", state, ...(state === "running" ? { activity: { currentTool: "bash", turnCount: 12, toolCount: 24 } } : {}) }] } } });
+      reply({
+        version: 1,
+        requestId: request.requestId,
+        success: true,
+        data: {
+          text: state,
+          asyncSnapshot: {
+            kind: "pi-subagents.async-status-snapshot",
+            version: 1,
+            runs: [
+              {
+                id: "progress-phase-run",
+                state,
+                ...(state === "running" ? { activity: { currentTool: "bash", turnCount: 12, toolCount: 24 } } : {}),
+              },
+            ],
+          },
+        },
+      });
       return;
     }
     reply({ version: 1, requestId: request.requestId, success: true, data: { text: "interrupted" } });
   });
-  const updates: Array<{ content: Array<{ text: string }>; details: { operation: string; runId: string; state: string; pollCount: number; phaseId?: string; currentTool?: string; turnCount?: number; toolCount?: number } }> = [];
+  const updates: Array<{
+    content: Array<{ text: string }>;
+    details: {
+      operation: string;
+      runId: string;
+      state: string;
+      pollCount: number;
+      phaseId?: string;
+      currentTool?: string;
+      turnCount?: number;
+      toolCount?: number;
+    };
+  }> = [];
   try {
     await extension.tools.get("rpi_implement_phase")!.execute(
       "call",
-      { phaseId: "Phase 1: Implement the phase.", agent: "artifact-implementer", phaseTask: "Implement safely", timeoutMs: 5_000 },
+      {
+        phaseId: "Phase 1: Implement the phase.",
+        agent: "artifact-implementer",
+        phaseTask: "Implement safely",
+        timeoutMs: 5_000,
+      },
       new AbortController().signal,
-      (update) => { updates.push(update as typeof updates[number]); },
+      (update) => {
+        updates.push(update as (typeof updates)[number]);
+      },
       extension.context(project),
     );
 
-    assert.deepEqual(updates.map((update) => update.details), [
-      { operation: "implementation", runId: "progress-phase-run", state: "queued", pollCount: 0, phaseId: "Phase 1: Implement the phase." },
-      { operation: "implementation", runId: "progress-phase-run", state: "running", pollCount: 1, phaseId: "Phase 1: Implement the phase.", currentTool: "bash", turnCount: 12, toolCount: 24 }
-    ]);
+    assert.deepEqual(
+      updates.map((update) => update.details),
+      [
+        {
+          operation: "implementation",
+          runId: "progress-phase-run",
+          state: "queued",
+          pollCount: 0,
+          phaseId: "Phase 1: Implement the phase.",
+        },
+        {
+          operation: "implementation",
+          runId: "progress-phase-run",
+          state: "running",
+          pollCount: 1,
+          phaseId: "Phase 1: Implement the phase.",
+          currentTool: "bash",
+          turnCount: 12,
+          toolCount: 24,
+        },
+      ],
+    );
     assert.match(updates[1]?.content[0]?.text ?? "", /running · bash · 12 turns · 24 tools/);
     for (const name of ["rpi_start_research", "rpi_implement_phase", "rpi_review_implementation"]) {
       assert.equal(typeof extension.tools.get(name)?.renderResult, "function");
@@ -1160,33 +1916,73 @@ test("rpi_implement_phase forwards queued and running updates with compact rende
     const theme = { fg: (_color: string, text: string) => text };
     const partial = renderResult(
       { content: [{ type: "text", text: updates[1]!.content[0]!.text }], details: updates[1]!.details },
-      { expanded: false, isPartial: true }, theme, { isError: false },
-    ).render(160).join("\n");
+      { expanded: false, isPartial: true },
+      theme,
+      { isError: false },
+    )
+      .render(160)
+      .join("\n");
     const compact = renderResult(
-      { content: [{ type: "text", text: "payload" }], details: { runId: "progress-phase-run", state: "complete", phaseId: "Phase 1: Implement the phase." } },
-      { expanded: false, isPartial: false }, theme, { isError: false },
-    ).render(160).join("\n");
+      {
+        content: [{ type: "text", text: "payload" }],
+        details: { runId: "progress-phase-run", state: "complete", phaseId: "Phase 1: Implement the phase." },
+      },
+      { expanded: false, isPartial: false },
+      theme,
+      { isError: false },
+    )
+      .render(160)
+      .join("\n");
     const expanded = renderResult(
-      { content: [{ type: "text", text: "payload" }], details: { runId: "progress-phase-run", state: "complete", phaseId: "Phase 1: Implement the phase." } },
-      { expanded: true, isPartial: false }, theme, { isError: false },
-    ).render(160).join("\n");
+      {
+        content: [{ type: "text", text: "payload" }],
+        details: { runId: "progress-phase-run", state: "complete", phaseId: "Phase 1: Implement the phase." },
+      },
+      { expanded: true, isPartial: false },
+      theme,
+      { isError: false },
+    )
+      .render(160)
+      .join("\n");
     const partialFinal = renderResult(
-      { content: [{ type: "text", text: "partial payload" }], details: { runId: "progress-phase-run", state: "partial", phaseId: "Phase 1: Implement the phase." } },
-      { expanded: false, isPartial: false }, theme, { isError: false },
-    ).render(160).join("\n");
+      {
+        content: [{ type: "text", text: "partial payload" }],
+        details: { runId: "progress-phase-run", state: "partial", phaseId: "Phase 1: Implement the phase." },
+      },
+      { expanded: false, isPartial: false },
+      theme,
+      { isError: false },
+    )
+      .render(160)
+      .join("\n");
     const partialFinalExpanded = renderResult(
-      { content: [{ type: "text", text: "partial payload" }], details: { runId: "progress-phase-run", state: "partial", phaseId: "Phase 1: Implement the phase." } },
-      { expanded: true, isPartial: false }, theme, { isError: false },
-    ).render(160).join("\n");
+      {
+        content: [{ type: "text", text: "partial payload" }],
+        details: { runId: "progress-phase-run", state: "partial", phaseId: "Phase 1: Implement the phase." },
+      },
+      { expanded: true, isPartial: false },
+      theme,
+      { isError: false },
+    )
+      .render(160)
+      .join("\n");
     const error = renderResult(
       { content: [{ type: "text", text: "The implementation phase timed out after 10ms." }], details: undefined },
-      { expanded: false, isPartial: false }, theme, { isError: true },
-    ).render(160).join("\n");
+      { expanded: false, isPartial: false },
+      theme,
+      { isError: true },
+    )
+      .render(160)
+      .join("\n");
     assert.match(partial, /running · bash · 12 turns · 24 tools/);
     const queued = renderResult(
       { content: [{ type: "text", text: updates[0]!.content[0]!.text }], details: updates[0]!.details },
-      { expanded: false, isPartial: true }, theme, { isError: false },
-    ).render(160).join("\n");
+      { expanded: false, isPartial: true },
+      theme,
+      { isError: false },
+    )
+      .render(160)
+      .join("\n");
     assert.equal(queued.trimEnd(), "implementation phase Phase 1: Implement the phase. run progress-phase-run: queued");
     assert.doesNotMatch(compact, /payload/);
     assert.match(expanded, /payload/);
@@ -1204,9 +2000,24 @@ test("rpi_implement_phase forwards queued and running updates with compact rende
 test("research and review tools forward queued and running updates", async () => {
   const project = await tempProject();
   const root = join(project, ".pi", "artifacts");
-  const task = await createTask(root, { slug: "nonphase-progress", title: "Non-phase progress", flow: "rpi", baseBranch: "main" });
-  const branch = [{ type: "message", message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } } }];
-  const scenarios: Array<{ toolName: "rpi_start_research" | "rpi_review_implementation"; params: Record<string, unknown>; operation: "research" | "review"; runId: string }> = [
+  const task = await createTask(root, {
+    slug: "nonphase-progress",
+    title: "Non-phase progress",
+    flow: "rpi",
+    baseBranch: "main",
+  });
+  const branch = [
+    {
+      type: "message",
+      message: { role: "toolResult", toolName: "rpi_get_task_context", details: { taskSlug: task.slug } },
+    },
+  ];
+  const scenarios: Array<{
+    toolName: "rpi_start_research" | "rpi_review_implementation";
+    params: Record<string, unknown>;
+    operation: "research" | "review";
+    runId: string;
+  }> = [
     {
       toolName: "rpi_start_research",
       params: { nodes: ["artifact-locator", "artifact-analyzer"], tasks: ["Locate artifacts", "Analyze artifacts"] },
@@ -1225,30 +2036,54 @@ test("research and review tools forward queued and running updates", async () =>
       let statusCalls = 0;
       const extension = fakeExtensionApi(branch, undefined, [], (request, reply) => {
         if (request.method === "spawn") {
-          reply({ version: 1, requestId: request.requestId, success: true, data: { text: "spawn", details: { runId: scenario.runId } } });
+          reply({
+            version: 1,
+            requestId: request.requestId,
+            success: true,
+            data: { text: "spawn", details: { runId: scenario.runId } },
+          });
           return;
         }
         if (request.method === "status") {
           const state = ++statusCalls === 1 ? "running" : "complete";
-          reply({ version: 1, requestId: request.requestId, success: true, data: { text: state, asyncSnapshot: { kind: "pi-subagents.async-status-snapshot", version: 1, runs: [{ id: scenario.runId, state }] } } });
+          reply({
+            version: 1,
+            requestId: request.requestId,
+            success: true,
+            data: {
+              text: state,
+              asyncSnapshot: {
+                kind: "pi-subagents.async-status-snapshot",
+                version: 1,
+                runs: [{ id: scenario.runId, state }],
+              },
+            },
+          });
           return;
         }
         reply({ version: 1, requestId: request.requestId, success: true, data: { text: "interrupted" } });
       });
-      const updates: Array<{ details: { operation: string; runId: string; state: string; pollCount: number; phaseId?: string } }> = [];
+      const updates: Array<{
+        details: { operation: string; runId: string; state: string; pollCount: number; phaseId?: string };
+      }> = [];
 
       await extension.tools.get(scenario.toolName)!.execute(
         "call",
         scenario.params,
         new AbortController().signal,
-        (update) => { updates.push(update as typeof updates[number]); },
+        (update) => {
+          updates.push(update as (typeof updates)[number]);
+        },
         extension.context(project),
       );
 
-      assert.deepEqual(updates.map((update) => update.details), [
-        { operation: scenario.operation, runId: scenario.runId, state: "queued", pollCount: 0 },
-        { operation: scenario.operation, runId: scenario.runId, state: "running", pollCount: 1 },
-      ]);
+      assert.deepEqual(
+        updates.map((update) => update.details),
+        [
+          { operation: scenario.operation, runId: scenario.runId, state: "queued", pollCount: 0 },
+          { operation: scenario.operation, runId: scenario.runId, state: "running", pollCount: 1 },
+        ],
+      );
     }
   } finally {
     await rm(project, { recursive: true, force: true });
@@ -1287,12 +2122,16 @@ test("public RPI tools share artifacts and filesystem locking through a real wor
     const lockPath = join(taskDirectory, ".artifact-manifest.lock");
     await writeFile(lockPath, JSON.stringify({ owner: "test", pid: process.pid, createdAt: Date.now() }), "utf8");
     let completed = false;
-    const createThroughAlias = invoke(alias.tools.get("rpi_create_artifact")!, {
-      type: "research-questions",
-      description: "shared lock",
-      content: "Created through worktree",
-      dependsOn: [],
-    }, alias.context(worktree)).then((result) => {
+    const createThroughAlias = invoke(
+      alias.tools.get("rpi_create_artifact")!,
+      {
+        type: "research-questions",
+        description: "shared lock",
+        content: "Created through worktree",
+        dependsOn: [],
+      },
+      alias.context(worktree),
+    ).then((result) => {
       completed = true;
       return result;
     });
@@ -1301,18 +2140,30 @@ test("public RPI tools share artifacts and filesystem locking through a real wor
     await unlink(lockPath);
     await createThroughAlias;
 
-    const readFromOriginal = await invoke(original.tools.get("rpi_read_artifact")!, {
-      artifactId: "research-questions",
-    }, original.context(project)) as { content: Array<{ text: string }> };
+    const readFromOriginal = (await invoke(
+      original.tools.get("rpi_read_artifact")!,
+      {
+        artifactId: "research-questions",
+      },
+      original.context(project),
+    )) as { content: Array<{ text: string }> };
     assert.match(readFromOriginal.content[0]!.text, /Created through worktree/);
 
-    await invoke(original.tools.get("rpi_update_artifact")!, {
-      artifactId: "research-questions",
-      content: "Updated through original checkout",
-    }, original.context(project));
-    const readFromAlias = await invoke(alias.tools.get("rpi_read_artifact")!, {
-      artifactId: "research-questions",
-    }, alias.context(worktree)) as { content: Array<{ text: string }> };
+    await invoke(
+      original.tools.get("rpi_update_artifact")!,
+      {
+        artifactId: "research-questions",
+        content: "Updated through original checkout",
+      },
+      original.context(project),
+    );
+    const readFromAlias = (await invoke(
+      alias.tools.get("rpi_read_artifact")!,
+      {
+        artifactId: "research-questions",
+      },
+      alias.context(worktree),
+    )) as { content: Array<{ text: string }> };
     assert.match(readFromAlias.content[0]!.text, /Updated through original checkout/);
     assert.equal((await loadManifest(taskDirectory)).artifacts.length, 2);
   } finally {
