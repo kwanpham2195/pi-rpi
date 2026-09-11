@@ -49,7 +49,7 @@ For each phase, starting with Phase 1 or the first unchecked:
 
 - On a mismatch, present: **Plan requirement**, **Code reality**, **Consequence**, and **Requested direction**. Wait for the human; do not silently change scope, architecture, or the outline.
 - If the outline needs correction, stop implementation until the human directs an update through the local feedback flow or `iterate-structure-outline`.
-- When resuming, trust completed work unless something is inconsistent. Use the outline's checkboxes and ✅ phase titles to select the first incomplete phase.
+- When resuming, trust completed work unless something is inconsistent. Use the ✅ phase titles to select the first incomplete phase.
 - Never bypass a failed automated check or the manual gate. Never create a phase receipt for an uncommitted or unverified phase.
 
 ## Final Response

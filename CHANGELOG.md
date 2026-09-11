@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Invalidated stale artifact approvals and active dependent approvals after substantive edits while preserving receipt-backed phase-heading completion updates.
 - Removed the redundant `/plan`, `/prd`, `/research`, and related document-skeleton prompt templates; RPI skills remain the canonical artifact workflows.
 - Added oxfmt commands for formatting and checking TypeScript and JSON source files.
 - Validated manifests before artifact writes and recovered owned files on persistence failures without hiding rollback evidence.

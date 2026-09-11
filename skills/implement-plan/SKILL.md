@@ -48,7 +48,7 @@ For each phase, starting with Phase 1 or the first unchecked:
 ## Stops and Mismatches
 
 - If the plan cannot be followed, present: **Plan requirement**, **Code reality**, **Consequence**, and **Requested direction**. Wait for guidance before proceeding. Consider `iterate-plan` only when the user directs a plan update.
-- When resuming, use the plan's checkboxes to select the first unchecked phase. Trust completed work unless something is inconsistent.
+- When resuming, use the ✅ phase titles to select the first incomplete phase. Trust completed work unless something is inconsistent.
 - Never bypass a failed automated check or the manual gate. Never create a phase receipt for an uncommitted or unverified phase.
 
 ## Final Response
