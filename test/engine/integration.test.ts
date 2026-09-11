@@ -29,14 +29,19 @@ test("rpi-flow lifecycle mirrors the documented UI path", async () => {
   let m = await loadManifest(taskDir);
 
   // questions -> research -> design -> outline -> (plan) -> implementation -> pr
-  await createArtifact(taskDir, { type: "research-questions", description: "current-state", content: "Q", dependsOn: [] });
+  await createArtifact(taskDir, {
+    type: "research-questions",
+    description: "current-state",
+    content: "Q",
+    dependsOn: [],
+  });
   await setArtifactStatus(m, "research-questions", "in-review", taskDir);
   m = await setArtifactStatus(m, "research-questions", "approved", taskDir);
   await createArtifact(taskDir, {
     type: "research",
     description: "parent-child",
     content: "R",
-   dependsOn: ["research-questions"],
+    dependsOn: ["research-questions"],
   });
   m = await loadManifest(taskDir);
   await setArtifactStatus(m, "research", "in-review", taskDir);
@@ -45,7 +50,7 @@ test("rpi-flow lifecycle mirrors the documented UI path", async () => {
     type: "design-discussion",
     description: "parent-child",
     content: "D",
-   dependsOn: ["research"],
+    dependsOn: ["research"],
   });
   m = await loadManifest(taskDir);
   await setArtifactStatus(m, "design-discussion", "in-review", taskDir);
@@ -54,7 +59,7 @@ test("rpi-flow lifecycle mirrors the documented UI path", async () => {
     type: "structure-outline",
     description: "parent-child",
     content: "O",
-   dependsOn: ["design-discussion"],
+    dependsOn: ["design-discussion"],
   });
   m = await loadManifest(taskDir);
   await setArtifactStatus(m, "structure-outline", "in-review", taskDir);
@@ -62,7 +67,13 @@ test("rpi-flow lifecycle mirrors the documented UI path", async () => {
 
   // On-disk artifact filenames are chronological NN-<type>-<description>.
   const names = m.artifacts.map((a) => a.path).sort();
-  assert.deepEqual(names, ["01-research-questions-current-state.md", "02-research-parent-child.md", "03-design-discussion-parent-child.md", "04-structure-outline-parent-child.md", "ticket.md"]);
+  assert.deepEqual(names, [
+    "01-research-questions-current-state.md",
+    "02-research-parent-child.md",
+    "03-design-discussion-parent-child.md",
+    "04-structure-outline-parent-child.md",
+    "ticket.md",
+  ]);
 
   // precedence for a plugin built on outline excludes research-questions and honors the chain
   const inputs = resolvePrecedence(m, "plan");
@@ -82,7 +93,12 @@ test("rpi-flow lifecycle mirrors the documented UI path", async () => {
   assert.equal(onDisk.artifacts.filter((a) => a.type === "structure-outline")[0]?.status, "approved");
 
   // plan is optional: implement directly off the approved outline via a minimal implementation
-  await createArtifact(taskDir, { type: "implementation", description: "parent-child", content: "impl", dependsOn: [outline.artifact.id] });
+  await createArtifact(taskDir, {
+    type: "implementation",
+    description: "parent-child",
+    content: "impl",
+    dependsOn: [outline.artifact.id],
+  });
 
   // flow change to freeform (no orphan) works; change to prd would orphan design-discussion
   m = await loadManifest(taskDir);
@@ -103,17 +119,19 @@ test("oneshot flow skips planning stages", async () => {
     ticketBody: "# FIX\n",
   });
   const taskDir = join(base, "hotfix");
-  await createArtifact(taskDir, { type: "implementation", description: "hotfix", content: "fix", dependsOn: ["ticket"] });
+  await createArtifact(taskDir, {
+    type: "implementation",
+    description: "hotfix",
+    content: "fix",
+    dependsOn: ["ticket"],
+  });
   // research is not enabled in oneshot
   await assert.rejects(
     createArtifact(taskDir, { type: "research", description: "r", content: "", dependsOn: [] }),
     /not enabled in flow/,
   );
   const onDisk = await loadManifest(taskDir);
-  assert.deepEqual(
-    onDisk.artifacts.map((a) => a.type).sort(),
-    ["implementation", "ticket"],
-  );
+  assert.deepEqual(onDisk.artifacts.map((a) => a.type).sort(), ["implementation", "ticket"]);
   await rm(base, { recursive: true, force: true });
 });
 

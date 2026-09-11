@@ -3,45 +3,40 @@
   "version": "0.1.0",
   "description": "Local-first Research-Plan-Implement workflow for Pi: task artifacts, manifest protocol, specialist agents, and TUI.",
   "keywords": [
-    "pi-package",
-    "pi",
-    "rpi",
-    "planning",
     "artifacts",
+    "pi",
+    "pi-package",
+    "planning",
+    "rpi",
     "workflow"
   ],
   "license": "MIT",
-  "type": "module",
   "files": [
     "extensions",
     "agents",
     "skills",
-    "prompts",
     "src",
     "README.md",
     "CHANGELOG.md",
     "SAMPLES.md",
     "docs"
   ],
+  "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test test/unit/*.test.ts test/engine/*.test.ts"
+    "test": "node --experimental-strip-types --test test/unit/*.test.ts test/engine/*.test.ts",
+    "format": "oxfmt --write package.json 'extensions/**/*.ts' 'src/**/*.ts' 'test/**/*.ts'",
+    "format:check": "oxfmt --check package.json 'extensions/**/*.ts' 'src/**/*.ts' 'test/**/*.ts'"
   },
-  "pi": {
-    "extensions": [
-      "./extensions/*.ts"
-    ],
-    "skills": [
-      "./skills"
-    ],
-    "prompts": [
-      "./prompts"
-    ],
-    "subagents": {
-      "agents": [
-        "./agents"
-      ]
-    }
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "0.84.4",
+    "@earendil-works/pi-ai": "0.84.4",
+    "@earendil-works/pi-coding-agent": "0.84.4",
+    "@earendil-works/pi-tui": "0.84.4",
+    "@types/node": "^24.0.0",
+    "oxfmt": "^0.67.0",
+    "typebox": "^1.1.38",
+    "typescript": "^5.9.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": ">=0.84.4",
@@ -50,13 +45,17 @@
     "@earendil-works/pi-tui": ">=0.84.4",
     "typebox": "*"
   },
-  "devDependencies": {
-    "@earendil-works/pi-agent-core": "0.84.4",
-    "@earendil-works/pi-ai": "0.84.4",
-    "@earendil-works/pi-coding-agent": "0.84.4",
-    "@earendil-works/pi-tui": "0.84.4",
-    "@types/node": "^24.0.0",
-    "typebox": "^1.1.38",
-    "typescript": "^5.9.0"
+  "pi": {
+    "extensions": [
+      "./extensions/*.ts"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "subagents": {
+      "agents": [
+        "./agents"
+      ]
+    }
   }
 }

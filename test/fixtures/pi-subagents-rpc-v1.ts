@@ -22,13 +22,15 @@ export const PI_SUBAGENTS_RPC_V1_FIXTURE = {
         maxSerializedBytes: 32 * 1024,
       },
       omitted: { runs: 0, children: 0, byteLimitExceeded: false },
-      runs: [{
-        id: "fixture-run",
-        kind: "subagent",
-        label: "artifact-implementer",
-        state: "running",
-        activity: { currentTool: "bash", turnCount: 1, toolCount: 2 },
-      }],
+      runs: [
+        {
+          id: "fixture-run",
+          kind: "subagent",
+          label: "artifact-implementer",
+          state: "running",
+          activity: { currentTool: "bash", turnCount: 1, toolCount: 2 },
+        },
+      ],
     },
   },
   completion: {

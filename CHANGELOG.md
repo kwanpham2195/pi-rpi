@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- Removed the redundant `/plan`, `/prd`, `/research`, and related document-skeleton prompt templates; RPI skills remain the canonical artifact workflows.
+- Added oxfmt commands for formatting and checking TypeScript and JSON source files.
 - Validated manifests before artifact writes and recovered owned files on persistence failures without hiding rollback evidence.
 - Improved agent-run status recovery for well-formed snapshots that omit the owned run while retaining strict malformed-state failures.
 - Shared one authoritative task artifact root across configured worktrees and kept superseded history from blocking valid flow changes.

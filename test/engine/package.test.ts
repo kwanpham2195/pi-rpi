@@ -13,7 +13,7 @@ test("package.json declares the pi manifest surface", async () => {
   assert.ok(Array.isArray(pkg.pi.extensions));
   assert.equal(pkg.pi.extensions.includes("./node_modules/pi-subagents/index.ts"), false);
   assert.ok(Array.isArray(pkg.pi.skills));
-  assert.ok(Array.isArray(pkg.pi.prompts));
+  assert.equal(pkg.pi.prompts, undefined);
   assert.ok(pkg.files.includes("CHANGELOG.md"));
   assert.deepEqual(pkg.pi.subagents?.agents, ["./agents"]);
   assert.equal(pkg.dependencies?.["pi-subagents"], undefined);
@@ -51,9 +51,21 @@ test("implementation agents are code-only writer lanes", async () => {
   for (const name of ["artifact-implementer.md", "artifact-outline-implementer.md"]) {
     const text = await readFile(resolve(pkgRoot, "agents", name), "utf8");
     assert.match(text, /^acceptanceRole: writer$/m, `${name}: missing writer acceptance role`);
-    assert.doesNotMatch(text.split("---")[1] ?? "", /rpi_update_artifact/, `${name}: exposes artifact mutation in tools`);
-    assert.match(text, /authoritative (plan or ticket path|structure-outline path)/i, `${name}: does not require exact source path`);
-    assert.match(text, /canonical phase ID|exact `## Phase N: title`/i, `${name}: does not require a canonical phase ID`);
+    assert.doesNotMatch(
+      text.split("---")[1] ?? "",
+      /rpi_update_artifact/,
+      `${name}: exposes artifact mutation in tools`,
+    );
+    assert.match(
+      text,
+      /authoritative (plan or ticket path|structure-outline path)/i,
+      `${name}: does not require exact source path`,
+    );
+    assert.match(
+      text,
+      /canonical phase ID|exact `## Phase N: title`/i,
+      `${name}: does not require a canonical phase ID`,
+    );
     assert.match(text, /focused automated/i, `${name}: missing focused verification guidance`);
     assert.match(text, /ready for parent verification/i, `${name}: missing parent handoff`);
   }
@@ -68,13 +80,29 @@ test("authoritative phase templates and runtime skills preserve the implementati
     const text = await readFile(resolve(pkgRoot, file), "utf8");
     assert.match(text, /one observable behavior/i, `${file}: missing phase-size contract`);
     assert.match(text, /focused automated/i, `${file}: missing focused verification contract`);
-    assert.match(text, /parent.*(human gate|full repository gate|artifact)/is, `${file}: missing parent ownership contract`);
-    assert.equal((text.match(/^## Phase heading convention$/gm) ?? []).length, 1, `${file}: heading convention must be stated once`);
+    assert.match(
+      text,
+      /parent.*(human gate|full repository gate|artifact)/is,
+      `${file}: missing parent ownership contract`,
+    );
+    assert.equal(
+      (text.match(/^## Phase heading convention$/gm) ?? []).length,
+      1,
+      `${file}: heading convention must be stated once`,
+    );
     assert.match(text, /source heading as `## Phase N: title`/i, `${file}: missing parseable source heading`);
     assert.match(text, /heading text `Phase N: title` as `phaseId`/i, `${file}: missing caller phase ID`);
-    assert.match(text, /without the leading Markdown `##` or any completion marker/i, `${file}: phase ID permits heading decoration`);
+    assert.match(
+      text,
+      /without the leading Markdown `##` or any completion marker/i,
+      `${file}: phase ID permits heading decoration`,
+    );
     assert.match(text, /Oneshot ticket callers use `implementation`/i, `${file}: missing oneshot phase ID`);
-    assert.equal((text.match(/Canonical phase ID/gi) ?? []).length, 0, `${file}: repeats the convention in a sample phase`);
+    assert.equal(
+      (text.match(/Canonical phase ID/gi) ?? []).length,
+      0,
+      `${file}: repeats the convention in a sample phase`,
+    );
   }
 
   for (const file of ["skills/implement-plan/SKILL.md", "skills/implement-outline/SKILL.md"]) {
@@ -100,17 +128,16 @@ test("installed-runtime smoke documentation preserves lifecycle and ownership ch
     /run ID and terminal state/i,
     /no live or orphan run remains/i,
     /never reuse or close a session owned by another user/i,
-  ]) assert.match(text, contract);
+  ])
+    assert.match(text, contract);
 });
 
-test("skill, agent, and prompt counts match the plan", async () => {
+test("skill and agent counts match the package surface", async () => {
   const { readdir } = await import("node:fs/promises");
   const skills = await readdir(resolve(pkgRoot, "skills"));
   assert.equal(skills.length, 22);
   const agents = await readdir(resolve(pkgRoot, "agents"));
   assert.equal(agents.length, 7);
-  const prompts = await readdir(resolve(pkgRoot, "prompts"));
-  assert.equal(prompts.length, 7);
 });
 
 test("every SKILL.md has valid frontmatter (name + description)", async () => {

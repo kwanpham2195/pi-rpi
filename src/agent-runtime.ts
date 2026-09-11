@@ -1,18 +1,14 @@
 /** Launch adapters for pi-subagents RPC. */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-export type ResearchNode = "artifact-locator" | "artifact-analyzer" | "artifact-pattern-finder" | "artifact-web-researcher";
+export type ResearchNode =
+  | "artifact-locator"
+  | "artifact-analyzer"
+  | "artifact-pattern-finder"
+  | "artifact-web-researcher";
 
 /** Lifecycle states reported by the pi-subagents async runtime. */
-export type RunState =
-  | "queued"
-  | "running"
-  | "complete"
-  | "failed"
-  | "partial"
-  | "paused"
-  | "stopped"
-  | "rejected";
+export type RunState = "queued" | "running" | "complete" | "failed" | "partial" | "paused" | "stopped" | "rejected";
 
 /** Activity fields projected by a child run when the installed runtime provides them. */
 export interface RunActivity {
@@ -88,10 +84,22 @@ const RUN_STATES: ReadonlySet<RunState> = new Set([
   "stopped",
   "rejected",
 ]);
-const TERMINAL_STATES: ReadonlySet<RunState> = new Set(["complete", "failed", "partial", "paused", "stopped", "rejected"]);
+const TERMINAL_STATES: ReadonlySet<RunState> = new Set([
+  "complete",
+  "failed",
+  "partial",
+  "paused",
+  "stopped",
+  "rejected",
+]);
 
 /** Call pi-subagents RPC and parse its public envelope before use. */
-export function rpcCall(pi: ExtensionAPI, method: string, params: Record<string, unknown>, options: RunOptions = {}): Promise<RpcReply> {
+export function rpcCall(
+  pi: ExtensionAPI,
+  method: string,
+  params: Record<string, unknown>,
+  options: RunOptions = {},
+): Promise<RpcReply> {
   return new Promise((resolvePromise, rejectPromise) => {
     const requestId = crypto.randomUUID();
     const eventName = `subagents:rpc:v1:reply:${requestId}`;
@@ -146,7 +154,9 @@ export async function assertSubagentsRpcAvailable(pi: ExtensionAPI, options: Run
     throw subagentsRpcUnavailableError(`pi-subagents RPC ping failed: ${ping.error.message}`);
   }
   if (ping.data.version !== 1) {
-    throw subagentsRpcUnavailableError(`pi-subagents RPC ping returned unsupported protocol version ${String(ping.data.version)}; expected 1`);
+    throw subagentsRpcUnavailableError(
+      `pi-subagents RPC ping returned unsupported protocol version ${String(ping.data.version)}; expected 1`,
+    );
   }
   const methods = ping.data.methods;
   if (!Array.isArray(methods) || methods.some((method) => typeof method !== "string")) {
@@ -174,7 +184,11 @@ function parseRpcReply(raw: unknown, expectedRequestId: string): RpcReply {
       error: { code: raw.error.code, message: raw.error.message },
     };
   }
-  if (!isRecord(raw.data) || (raw.data.text !== undefined && typeof raw.data.text !== "string") || (raw.data.details !== undefined && !isRecord(raw.data.details))) {
+  if (
+    !isRecord(raw.data) ||
+    (raw.data.text !== undefined && typeof raw.data.text !== "string") ||
+    (raw.data.details !== undefined && !isRecord(raw.data.details))
+  ) {
     throw new Error("Invalid pi-subagents RPC success reply.");
   }
   return {
@@ -186,7 +200,12 @@ function parseRpcReply(raw: unknown, expectedRequestId: string): RpcReply {
   };
 }
 
-async function waitForCompletion(pi: ExtensionAPI, runId: string, deadline: number, options: RunOptions): Promise<Completion> {
+async function waitForCompletion(
+  pi: ExtensionAPI,
+  runId: string,
+  deadline: number,
+  options: RunOptions,
+): Promise<Completion> {
   const runTimeoutMs = options.runTimeoutMs ?? DEFAULT_RESEARCH_TIMEOUT_MS;
   const waitController = new AbortController();
   let callerCancelled = options.signal?.aborted ?? false;
@@ -215,11 +234,16 @@ async function waitForCompletion(pi: ExtensionAPI, runId: string, deadline: numb
       if (statusRemainingMs <= 0) throw runDeadlineError(runId, runTimeoutMs);
       let status: RpcReply;
       try {
-        status = await rpcCall(pi, "status", { id: runId }, {
-          ...options,
-          signal: waitController.signal,
-          rpcTimeoutMs: Math.min(options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS, Math.max(1, statusRemainingMs)),
-        });
+        status = await rpcCall(
+          pi,
+          "status",
+          { id: runId },
+          {
+            ...options,
+            signal: waitController.signal,
+            rpcTimeoutMs: Math.min(options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS, Math.max(1, statusRemainingMs)),
+          },
+        );
       } catch (cause: unknown) {
         if (completion) return completion;
         if (!callerCancelled && Date.now() >= deadline) throw runDeadlineError(runId, runTimeoutMs);
@@ -245,9 +269,8 @@ async function waitForCompletion(pi: ExtensionAPI, runId: string, deadline: numb
     }
   } catch (cause: unknown) {
     if (completion) return completion;
-    const cleanup = callerCancelled || options.signal?.aborted
-      ? await interruptOwnedRun(pi, runId)
-      : await stopOwnedRun(pi, runId);
+    const cleanup =
+      callerCancelled || options.signal?.aborted ? await interruptOwnedRun(pi, runId) : await stopOwnedRun(pi, runId);
     throw addCleanupWarning(cause, cleanup.warning);
   } finally {
     unsubscribe();
@@ -275,13 +298,19 @@ async function waitForCompletionEventGrace(
 function parseRunStatus(data: RpcData, runId: string): ParsedRunStatus {
   const snapshot = data.asyncSnapshot;
   if (snapshot !== undefined) {
-    if (!isRecord(snapshot) || snapshot.kind !== "pi-subagents.async-status-snapshot" || snapshot.version !== 1 || !Array.isArray(snapshot.runs)) {
+    if (
+      !isRecord(snapshot) ||
+      snapshot.kind !== "pi-subagents.async-status-snapshot" ||
+      snapshot.version !== 1 ||
+      !Array.isArray(snapshot.runs)
+    ) {
       throw new Error("Invalid pi-subagents status reply: data.asyncSnapshot is invalid.");
     }
     const run = snapshot.runs.find((candidate) => isRecord(candidate) && candidate.id === runId);
     if (isRecord(run)) {
       const state = parseRunState(run.state);
-      if (!state) throw new Error(`Invalid pi-subagents status reply: unknown asyncSnapshot state "${String(run.state)}".`);
+      if (!state)
+        throw new Error(`Invalid pi-subagents status reply: unknown asyncSnapshot state "${String(run.state)}".`);
       const activity = parseActiveRunActivity(run);
       return {
         runId,
@@ -290,12 +319,16 @@ function parseRunStatus(data: RpcData, runId: string): ParsedRunStatus {
       };
     }
   }
-  const fallback = typeof data.text === "string"
-    ? data.text.match(/(?:^|\n)\s*State:\s*(queued|running|complete|completed|partial|failed|paused|stopped|rejected)\b/i)?.[1]
-    : undefined;
+  const fallback =
+    typeof data.text === "string"
+      ? data.text.match(
+          /(?:^|\n)\s*State:\s*(queued|running|complete|completed|partial|failed|paused|stopped|rejected)\b/i,
+        )?.[1]
+      : undefined;
   const state = fallback ? parseRunState(fallback) : undefined;
   if (!state) {
-    if (snapshot !== undefined) throw new Error(`Invalid pi-subagents status reply: asyncSnapshot has no state for run ${runId}.`);
+    if (snapshot !== undefined)
+      throw new Error(`Invalid pi-subagents status reply: asyncSnapshot has no state for run ${runId}.`);
     throw new Error("Invalid pi-subagents status reply: data.asyncSnapshot is required.");
   }
   return { runId, state };
@@ -341,9 +374,12 @@ function parseActiveRunActivity(run: Record<string, unknown>): RunActivity | und
 function activeSnapshotChild(children: unknown): Record<string, unknown> | undefined {
   if (!Array.isArray(children)) return undefined;
   const records = children.filter(isRecord);
-  const active = records.find((child) => child.state === "running")
-    ?? records.find((child) => child.state === "queued")
-    ?? records.find((child) => typeof child.state === "string" && !TERMINAL_STATES.has(parseRunState(child.state) ?? "failed"));
+  const active =
+    records.find((child) => child.state === "running") ??
+    records.find((child) => child.state === "queued") ??
+    records.find(
+      (child) => typeof child.state === "string" && !TERMINAL_STATES.has(parseRunState(child.state) ?? "failed"),
+    );
   return active;
 }
 
@@ -388,7 +424,9 @@ async function stopOwnedRun(pi: ExtensionAPI, runId: string): Promise<CleanupRes
   const reconciliation = await reconcileOwnedRun(pi, runId);
   if (reconciliation.state !== undefined) return {};
   return {
-    warning: [requestWarning, reconciliation.warning].filter((value): value is string => value !== undefined).join("; ") || `run ${runId} did not reach a terminal state after stop`,
+    warning:
+      [requestWarning, reconciliation.warning].filter((value): value is string => value !== undefined).join("; ") ||
+      `run ${runId} did not reach a terminal state after stop`,
   };
 }
 
@@ -412,7 +450,12 @@ async function reconcileOwnedRun(pi: ExtensionAPI, runId: string): Promise<{ sta
   while (Date.now() < deadline) {
     const remainingMs = Math.max(1, deadline - Date.now());
     try {
-      const status = await rpcCall(pi, "status", { id: runId }, { rpcTimeoutMs: Math.min(CLEANUP_RPC_TIMEOUT_MS, remainingMs) });
+      const status = await rpcCall(
+        pi,
+        "status",
+        { id: runId },
+        { rpcTimeoutMs: Math.min(CLEANUP_RPC_TIMEOUT_MS, remainingMs) },
+      );
       if (!status.success) {
         lastWarning = `status reconciliation failed: ${status.error.message}`;
       } else {
@@ -483,38 +526,63 @@ function runIdFrom(reply: RpcReply): string {
   if (!reply.success) throw agentUnavailableError(new Error(`agent spawn failed: ${JSON.stringify(reply.error)}`));
   if (typeof reply.data.text !== "string") throw new Error("Invalid pi-subagents spawn reply: data.text is required.");
   const runId = reply.data.details?.runId ?? reply.data.details?.asyncId ?? reply.data.details?.id;
-  if (typeof runId !== "string" || !runId) throw new Error("Invalid pi-subagents spawn reply: data.details.runId is required.");
+  if (typeof runId !== "string" || !runId)
+    throw new Error("Invalid pi-subagents spawn reply: data.details.runId is required.");
   return runId;
 }
 
 function subagentsRpcUnavailableError(message: string): Error {
-  return new Error(`The pi-rpi agents could not run (${message}). Install pi-subagents separately with pi install npm:pi-subagents, confirm pi-rpi is installed with pi list, then retry.`);
+  return new Error(
+    `The pi-rpi agents could not run (${message}). Install pi-subagents separately with pi install npm:pi-subagents, confirm pi-rpi is installed with pi list, then retry.`,
+  );
 }
 
 /** Surface actionable guidance when installed package agents are unavailable. */
 export function agentUnavailableError(err: unknown): Error {
   const msg = err instanceof Error ? err.message : String(err);
   if (/requested unavailable child tools/i.test(msg)) {
-    return new Error(`The pi-rpi child is missing required extension tools (${msg}). The agent tools field is a strict allowlist; it does not load extension code. Load the provider in the child through subagentOnlyExtensions (child-only), extensions, or a path-like tools entry, and keep each registered tool name in tools.`);
+    return new Error(
+      `The pi-rpi child is missing required extension tools (${msg}). The agent tools field is a strict allowlist; it does not load extension code. Load the provider in the child through subagentOnlyExtensions (child-only), extensions, or a path-like tools entry, and keep each registered tool name in tools.`,
+    );
   }
-  if (/unknown agent|agent.*not.*regist|no such agent|invalid agent|timed out|did not reach a terminal state/i.test(msg)) {
-    return new Error(`The pi-rpi agents could not run (${msg}). Install pi-subagents separately with pi install npm:pi-subagents, confirm pi-rpi is installed with pi list, then retry.`);
+  if (
+    /unknown agent|agent.*not.*regist|no such agent|invalid agent|timed out|did not reach a terminal state/i.test(msg)
+  ) {
+    return new Error(
+      `The pi-rpi agents could not run (${msg}). Install pi-subagents separately with pi install npm:pi-subagents, confirm pi-rpi is installed with pi list, then retry.`,
+    );
   }
   return err instanceof Error ? err : new Error(msg);
 }
 
 /** Start the bounded research fanout as one pi-subagents workflow. */
-export async function startResearch(pi: ExtensionAPI, nodes: ResearchNode[], tasks: string[], cwd: string, options: RunOptions = {}): Promise<RunReceipt> {
+export async function startResearch(
+  pi: ExtensionAPI,
+  nodes: ResearchNode[],
+  tasks: string[],
+  cwd: string,
+  options: RunOptions = {},
+): Promise<RunReceipt> {
   if (nodes.length < 2) throw new Error("Research fanout needs at least 2 nodes");
   if (nodes.length > 6) throw new Error("Research fanout caps at 6 nodes");
   if (nodes.length !== tasks.length) throw new Error("nodes and tasks length mismatch");
-  const items = nodes.map((agent, index) => `{ key: "n${index}", agent: ${JSON.stringify(agent)}, task: ${JSON.stringify(tasks[index] ?? "")}, context: "fresh", cwd: ${JSON.stringify(cwd)} }`).join(",\n        ");
-  const run = await launchOwnedRun(pi, (runTimeoutMs) => ({
-    workflowScript: `return runs.all([\n        ${items}\n      ])`,
-    context: "fresh",
-    async: true,
-    timeoutMs: runTimeoutMs,
-  }), options, DEFAULT_RESEARCH_TIMEOUT_MS);
+  const items = nodes
+    .map(
+      (agent, index) =>
+        `{ key: "n${index}", agent: ${JSON.stringify(agent)}, task: ${JSON.stringify(tasks[index] ?? "")}, context: "fresh", cwd: ${JSON.stringify(cwd)} }`,
+    )
+    .join(",\n        ");
+  const run = await launchOwnedRun(
+    pi,
+    (runTimeoutMs) => ({
+      workflowScript: `return runs.all([\n        ${items}\n      ])`,
+      context: "fresh",
+      async: true,
+      timeoutMs: runTimeoutMs,
+    }),
+    options,
+    DEFAULT_RESEARCH_TIMEOUT_MS,
+  );
   return { runId: run.runId, ...(await run.completion) };
 }
 
@@ -526,15 +594,20 @@ export async function implementPhase(
   cwd: string,
   options: ImplementationPhaseOptions = {},
 ): Promise<RunReceipt> {
-  const run = await launchOwnedRun(pi, (runTimeoutMs) => ({
-    agent,
-    task: phaseTask,
-    context: "fresh",
-    cwd,
-    async: true,
-    timeoutMs: runTimeoutMs,
-    ...(options.model !== undefined ? { model: options.model } : {}),
-  }), options, DEFAULT_IMPLEMENTATION_TIMEOUT_MS);
+  const run = await launchOwnedRun(
+    pi,
+    (runTimeoutMs) => ({
+      agent,
+      task: phaseTask,
+      context: "fresh",
+      cwd,
+      async: true,
+      timeoutMs: runTimeoutMs,
+      ...(options.model !== undefined ? { model: options.model } : {}),
+    }),
+    options,
+    DEFAULT_IMPLEMENTATION_TIMEOUT_MS,
+  );
   try {
     return { runId: run.runId, ...(await run.completion) };
   } catch (cause: unknown) {
@@ -550,21 +623,37 @@ function isRunTimeoutError(cause: unknown): boolean {
   return cause instanceof Error && cause.name === "RunTimeoutError";
 }
 
-function implementationPhaseTimeoutError(phaseId: string | undefined, runId: string | undefined, runTimeoutMs: number): Error {
+function implementationPhaseTimeoutError(
+  phaseId: string | undefined,
+  runId: string | undefined,
+  runTimeoutMs: number,
+): Error {
   const identifiers = [phaseId && `phase ${phaseId}`, runId && `run ${runId}`].filter(Boolean).join(", ");
-  return new Error(`The implementation phase timed out after ${runTimeoutMs}ms${identifiers ? ` (${identifiers})` : ""}.`);
+  return new Error(
+    `The implementation phase timed out after ${runTimeoutMs}ms${identifiers ? ` (${identifiers})` : ""}.`,
+  );
 }
 
 /** Start the implementation reviewer directly, without a workflow wrapper. */
-export async function reviewImplementation(pi: ExtensionAPI, task: string, cwd: string, options: RunOptions = {}): Promise<RunReceipt> {
-  const run = await launchOwnedRun(pi, (runTimeoutMs) => ({
-    agent: "artifact-implementation-reviewer",
-    task,
-    context: "fresh",
-    cwd,
-    async: true,
-    timeoutMs: runTimeoutMs,
-  }), options, DEFAULT_RESEARCH_TIMEOUT_MS);
+export async function reviewImplementation(
+  pi: ExtensionAPI,
+  task: string,
+  cwd: string,
+  options: RunOptions = {},
+): Promise<RunReceipt> {
+  const run = await launchOwnedRun(
+    pi,
+    (runTimeoutMs) => ({
+      agent: "artifact-implementation-reviewer",
+      task,
+      context: "fresh",
+      cwd,
+      async: true,
+      timeoutMs: runTimeoutMs,
+    }),
+    options,
+    DEFAULT_RESEARCH_TIMEOUT_MS,
+  );
   return { runId: run.runId, ...(await run.completion) };
 }
 
@@ -590,7 +679,11 @@ async function launchOwnedRun(
   };
 }
 
-async function spawnOwnedRun(pi: ExtensionAPI, params: Record<string, unknown>, options: RunOptions): Promise<SpawnedRun> {
+async function spawnOwnedRun(
+  pi: ExtensionAPI,
+  params: Record<string, unknown>,
+  options: RunOptions,
+): Promise<SpawnedRun> {
   if (options.signal?.aborted) throw abortError();
   const rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
   // This exchange retains exactly one bounded reply listener after its caller
@@ -603,7 +696,9 @@ async function spawnOwnedRun(pi: ExtensionAPI, params: Record<string, unknown>, 
   let primaryOutcome: SpawnOutcome | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let rejectCancellation: ((cause: Error) => void) | undefined;
-  const cancellation = new Promise<never>((_resolve, reject) => { rejectCancellation = reject; });
+  const cancellation = new Promise<never>((_resolve, reject) => {
+    rejectCancellation = reject;
+  });
   const abort = () => {
     if (primaryOutcome !== undefined) return;
     primaryOutcome = "cancelled";
@@ -626,9 +721,8 @@ async function spawnOwnedRun(pi: ExtensionAPI, params: Record<string, unknown>, 
   }).then(async (reply): Promise<SpawnedRun> => {
     const runId = runIdFrom(reply);
     if (primaryOutcome !== undefined) {
-      const cleanup = primaryOutcome === "cancelled"
-        ? await interruptOwnedRun(pi, runId)
-        : await stopOwnedRun(pi, runId);
+      const cleanup =
+        primaryOutcome === "cancelled" ? await interruptOwnedRun(pi, runId) : await stopOwnedRun(pi, runId);
       if (cleanup.warning) timeoutError.message += ` Cleanup warning: ${cleanup.warning}`;
     }
     return { runId, deadline };
